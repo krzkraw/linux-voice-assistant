@@ -24,6 +24,7 @@ Because it runs on a full Linux system and offers access significantly more loca
 - Prebuild docker image available on [GitHub Container Registry](https://github.com/OHF-Voice/linux-voice-assistant/pkgs/container/linux-voice-assistant)
 - Prebuild [Raspberry Pi image](https://github.com/florian-asche/PiCompose)
 - Supports [Websocket API](./docs/peripheral_api.md) for peripherals (e.g. buttons, LEDs, etc.) to integrate with the voice assistant
+- Optional [audio tuning WebUI](docs/web_ui.md) with shared settings, microphone feeds, and primary wake-word scores
 
 ## Requirements
 

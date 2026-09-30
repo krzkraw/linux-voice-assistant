@@ -54,6 +54,8 @@ function disconnect() {
   deferredState = undefined;
   const previous = socket;
   socket = undefined;
+  document.getElementById('connection').classList.remove('online');
+  document.getElementById('connection-text').textContent = 'Disconnected';
   previous?.close();
 }
 
@@ -92,6 +94,7 @@ function connect() {
 
 async function set(name, value) {
   if (pending) return;
+  const generation = connectionGeneration;
   pending = true;
   for (const control of Object.values(controls)) control.disabled = true;
   message.textContent = 'Saving…';
@@ -99,14 +102,19 @@ async function set(name, value) {
     const state = await request('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, value }) });
     pending = false;
     for (const control of Object.values(controls)) control.disabled = false;
+    if (generation !== connectionGeneration) return;
     showState(state);
     if (deferredState) { showState(deferredState); deferredState = undefined; }
     message.textContent = 'Saved';
   } catch (error) {
     pending = false;
     for (const control of Object.values(controls)) control.disabled = false;
+    if (generation !== connectionGeneration) return;
     message.textContent = `Could not save: ${error.message}`;
-    try { showState(await request('/api/state')); } catch { /* Authentication may have expired. */ }
+    try {
+      const state = await request('/api/state');
+      if (generation === connectionGeneration) showState(state);
+    } catch { /* Authentication may have expired. */ }
     deferredState = undefined;
   }
 }

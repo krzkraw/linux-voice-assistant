@@ -293,10 +293,17 @@ The following variables can be configured in the `.env` or in the service file:
 | `PERIPHERAL_PORT` | 6055 | Port for the peripheral WebSocket API |
 | `PERIPHERAL_VOLUME_STEP` | %(default)s | Volume change per button press |
 | `DISABLE_PERIPHERAL_API` | false | Disable the peripheral WebSocket API |
+| `WEB_UI_ENABLED` | `0` | Set exactly `1` to enable the optional audio tuning WebUI |
+| `WEB_UI_HOST` | `127.0.0.1` | WebUI bind address |
+| `WEB_UI_PORT` | `6056` | WebUI port |
+| `WEB_UI_PASSWORD_FILE` | Unset | Private, process-readable password file |
+| `WEB_UI_AUTH_BYPASS_CIDRS` | Empty | Comma-separated transport peers allowed without login |
 | `ENABLE_OUTPUT_ONLY` | (optional) | Set to "1" to enable output-only mode |
 
 
 💡 **Note:** For the systemd installation some variables set in the service need to be without `LVA_` prefix.
+
+See [Native audio tuning WebUI](web_ui.md) for password-file mounts, SSH tunnels, security, and monitoring instructions.
 
 ### Feature: Listen During Wake Sound
 

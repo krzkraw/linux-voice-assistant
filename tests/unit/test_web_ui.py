@@ -154,6 +154,46 @@ def test_disabled_defaults_and_assets(tmp_path):
         WebUI(make_state(tmp_path), "127.0.0.1", free_port(), None, "not-an-ip")
 
 
+def test_existing_openwakeword_preferences_survive_loader_and_webui_snapshot(tmp_path):
+    from linux_voice_assistant.models import AvailableWakeWord, Preferences
+    from linux_voice_assistant.wake_word import find_available_wake_words, load_wake_models
+
+    saved = {
+        "active_wake_words": ["ok_nabu_v0.1", None],
+        "wake_word_1_sensitivity": 0.5,
+        "wake_word_2_sensitivity": 0.550000011920929,
+        "mic_auto_gain": 31,
+        "mic_noise_suppression": 1,
+        "mic_volume": 100,
+    }
+    preferences_path = tmp_path / "preferences.json"
+    preferences_path.write_text(json.dumps(saved), encoding="utf-8")
+    preferences = Preferences(**json.loads(preferences_path.read_text(encoding="utf-8")))
+    available = find_available_wake_words([Path("wakewords"), Path("wakewords/openWakeWord")], "stop")
+    assert available["ok_nabu_v0.1"].type == "openWakeWord"
+    assert available["ok_nabu_v0.1"].wake_word_path.is_file()
+    with patch.object(AvailableWakeWord, "load", return_value=SimpleNamespace(id="ok_nabu_v0.1")) as load:
+        models, active, fallback = load_wake_models(available, [word for word in preferences.active_wake_words if word is not None], "okay_nabu")
+    load.assert_called_once()
+    assert not fallback and active == {"ok_nabu_v0.1"}
+    state = make_state(
+        tmp_path,
+        preferences=preferences,
+        wake_words=models,
+        active_wake_words=active,
+        available_wake_words=available,
+        mic_volume=preferences.mic_volume,
+        mic_auto_gain=preferences.mic_auto_gain,
+        mic_noise_suppression=preferences.mic_noise_suppression,
+    )
+    state.refresh_primary_threshold()
+    snapshot = WebUI(state, "127.0.0.1", free_port(), None, "127.0.0.1/32")._snapshot()
+    assert snapshot["primary_model"] == "ok_nabu_v0.1" and snapshot["primary_threshold"] == 0.5
+    assert snapshot["mic_volume"] == 100 and snapshot["mic_auto_gain"] == 31 and snapshot["mic_noise_suppression"] == 1
+    state.save_preferences()
+    assert {key: json.loads(preferences_path.read_text(encoding="utf-8"))[key] for key in saved} == saved
+
+
 def test_ha_and_webui_share_model_commit_and_entity_state(tmp_path):
     from aioesphomeapi.api_pb2 import NumberStateResponse, VoiceAssistantSetConfiguration
 

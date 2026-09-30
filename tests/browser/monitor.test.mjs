@@ -76,3 +76,28 @@ assert.equal(monitor.streams.processed.length, 0);
 monitor.stop();
 assert.deepEqual(commands, ['monitor_start', 'monitor_stop']);
 assert.equal(monitor.sources.length, 0);
+
+for (const end of ['stop', 'disconnected']) {
+  let resume;
+  const before = commands.length;
+  monitor.context.resume = () => new Promise(resolve => { resume = resolve; });
+  const starting = monitor.start();
+  monitor[end]();
+  resume();
+  await starting;
+  assert.equal(commands.slice(before).includes('monitor_start'), false, `${end} must cancel a pending start`);
+  assert.equal(monitor.requested, false);
+}
+
+monitor.message({ type: 'monitor', active: true, epoch: 1, stream_id: 'test', sample_rate: 16000 });
+for (let i = 0; i < 1000; i++) {
+  monitor.binary(frame(1, i * 1024));
+  monitor.binary(frame(2, i * 1024));
+  monitor.message({ type: 'scores', epoch: 1, items: [{ at_sample: (i + 1) * 1024, probability: .2 }] });
+}
+assert.ok(monitor.streams.input.length <= 17 && monitor.streams.processed.length <= 17);
+assert.ok(monitor.scores.at(-1).at_sample - monitor.scores[0].at_sample <= 30 * 16000);
+monitor.state({ primary_model: 'first', primary_threshold: .7, revision: 1, muted: false });
+monitor.state({ primary_model: 'second', primary_threshold: .6, revision: 2, muted: false });
+assert.equal(monitor.scores.length, 0);
+monitor.stop();

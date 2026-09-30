@@ -5,14 +5,16 @@
 import asyncio
 import socket
 import struct
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiohttp import ClientSession, WSMsgType
+from aiohttp import ClientSession, CookieJar, WSMsgType
 
 from linux_voice_assistant.monitor import MonitorBus, MonitorEvent
 from linux_voice_assistant.web_ui import WebUI, _Client
 from tests.unit.conftest import make_state
+from tests.unit.test_web_ui import password_file
 
 
 def free_port():
@@ -65,6 +67,35 @@ async def test_monitor_binary_scores_reset_and_stop(tmp_path):
             assert not server.monitor.active
             assert not server.monitor.offer(MonitorEvent(reset_start["epoch"], 2, 4, 5, raw, [], [], False))
             await ws.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["logout", "expiry"])
+async def test_authenticated_monitor_loses_subscription_when_session_ends(tmp_path, reason):
+    server = WebUI(make_state(tmp_path), "127.0.0.1", free_port(), password_file(tmp_path))
+    await server.start()
+    origin = f"http://127.0.0.1:{server.port}"
+    try:
+        async with ClientSession(cookie_jar=CookieJar(unsafe=True)) as client:
+            response = await client.post(f"{origin}/api/login", json={"password": "secret"}, headers={"Origin": origin})
+            assert response.status == 200
+            ws = await client.ws_connect(f"{origin}/api/ws", headers={"Origin": origin})
+            await ws.receive_json()
+            await ws.send_json({"command": "monitor_start"})
+            assert (await ws.receive_json())["active"]
+            assert server.monitor is not None and server.monitor.active
+            if reason == "logout":
+                assert (await client.post(f"{origin}/api/logout", headers={"Origin": origin})).status == 200
+            else:
+                server.sessions[next(iter(server.sessions))] = time.monotonic() - 1
+                await ws.send_json({"command": "monitor_start"})
+            assert (await ws.receive(timeout=1)).type in (WSMsgType.CLOSE, WSMsgType.CLOSED)
+            await ws.close()
+            assert not server.monitor.active
+            assert not server.clients
+            assert server.monitor.capture(0, 1024) is None
     finally:
         await server.stop()
 

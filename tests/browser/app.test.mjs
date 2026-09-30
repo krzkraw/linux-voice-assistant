@@ -9,8 +9,12 @@ function fixture() {
   const elements = new Map(), sockets = [], requests = [], timers = new Map(), calls = [];
   let timerId = 0;
   const element = id => {
-    if (!elements.has(id)) elements.set(id, { hidden: id === 'controls', options: [], value: '', textContent: '', classList: { add() {}, remove() {} }, listeners: {},
-      addEventListener(type, fn) { this.listeners[type] = fn; }, replaceChildren(...options) { this.options = options; } });
+    if (!elements.has(id)) {
+      const classes = new Set();
+      elements.set(id, { hidden: id === 'controls', options: [], value: '', textContent: '',
+        classList: { add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value) }, listeners: {},
+        addEventListener(type, fn) { this.listeners[type] = fn; }, replaceChildren(...options) { this.options = options; } });
+    }
     return elements.get(id);
   };
   const document = { hidden: false, getElementById: element, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } };
@@ -33,6 +37,9 @@ async function ready() {
   f.requests.shift().resolve(state);
   await flush();
   assert.equal(f.sockets.length, 1);
+  f.sockets[0].onopen();
+  assert.equal(f.element('connection-text').textContent, 'Connected');
+  assert.equal(f.element('connection').classList.contains('online'), true);
   return f;
 }
 
@@ -40,6 +47,8 @@ const stale = await ready();
 const old = stale.sockets[0];
 stale.document.hidden = true;
 stale.document.listeners.visibilitychange();
+assert.equal(stale.element('connection-text').textContent, 'Disconnected');
+assert.equal(stale.element('connection').classList.contains('online'), false);
 stale.document.hidden = false;
 stale.document.listeners.visibilitychange();
 const count = stale.calls.length;
@@ -48,7 +57,7 @@ old.onmessage({ data: JSON.stringify({ ...state, revision: 99, mic_volume: 999 }
 old.onmessage({ data: new ArrayBuffer(0) });
 old.onmessage({ data: JSON.stringify({ type: 'reset' }) });
 old.onclose();
-assert.equal(stale.element('connection-text').textContent, '');
+assert.equal(stale.element('connection-text').textContent, 'Disconnected');
 assert.equal(stale.element('mic_volume').value, 100);
 assert.equal(stale.calls.length, count);
 assert.equal(stale.timers.size, 0);
@@ -73,3 +82,15 @@ for (const action of ['hide', 'logout']) {
   assert.equal(f.sockets.length, 1, `${action} must prevent retry reconnect`);
   if (action === 'logout') assert.equal(f.element('controls').hidden, true);
 }
+
+const saving = await ready();
+const save = saving.element('mic_volume').listeners.change();
+const savedResponse = saving.requests.shift();
+const logout = saving.element('logout').listeners.click();
+assert.equal(saving.element('connection-text').textContent, 'Disconnected');
+assert.equal(saving.element('connection').classList.contains('online'), false);
+saving.requests.shift().resolve({});
+await logout;
+savedResponse.resolve({ ...state, revision: 2, mic_volume: 50 });
+await save;
+assert.equal(saving.element('controls').hidden, true, 'A completed save must not reopen a logged-out page');

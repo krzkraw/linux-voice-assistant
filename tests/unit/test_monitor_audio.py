@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from linux_voice_assistant.monitor import MonitorBus
+from linux_voice_assistant.monitor import MonitorBus, MonitorEvent
 from tests.unit.conftest import make_state
 
 
@@ -59,12 +59,13 @@ class FakeSatellite:
             self.wakeups += 1
 
 
-def run_once(tmp_path, family, monitoring, satellite=True, active=False, channels=2):
+def run_once(tmp_path, family, monitoring, satellite=True, active=False, channels=2, probabilities=None):
     from linux_voice_assistant.__main__ import process_audio
 
     raw = np.array([[0.25, -0.5], [-0.75, 0.125]] * 512, dtype=np.float32)[:, :channels]
-    primary = FakeMicro("primary", [0.1, 0.8]) if family == "micro" else FakeOpen("primary", [0.1, 0.8])
-    secondary = FakeMicro("secondary", [0.2, 0.2])
+    probabilities = [0.1, 0.8] if probabilities is None else probabilities
+    primary = FakeMicro("primary", probabilities) if family == "micro" else FakeOpen("primary", probabilities)
+    secondary = FakeMicro("secondary", [0.2] * len(probabilities))
     state = make_state(tmp_path, audio_input_channels=channels, mic_volume=50, wake_words={"primary": primary, "secondary": secondary}, active_wake_words={"primary", "secondary"})
     state.preferences.active_wake_words = ["primary", "secondary"]
     fake_satellite = FakeSatellite(state, active) if satellite else None
@@ -72,12 +73,17 @@ def run_once(tmp_path, family, monitoring, satellite=True, active=False, channel
     deliveries = []
     if monitoring:
         bus = MonitorBus(MagicMock(), lambda events, dropped: deliveries.extend(events))
-        bus.start()
+        epoch, _ = bus.start()
+        if monitoring == "slow":
+            for index in range(8):
+                bus.offer(MonitorEvent(epoch, index, index + 1, 0, b"", [], [], False))
+        elif monitoring == "disconnected":
+            bus.stop()
         state.monitor_bus = bus
     mic = MagicMock()
     mic.recorder.return_value.__enter__.return_value.record.side_effect = [raw, RuntimeError("finished")]
     features = MagicMock()
-    features.process_streaming.return_value = [object(), object()]
+    features.process_streaming.return_value = [object() for _ in probabilities]
     with (
         patch("linux_voice_assistant.__main__.MicroWakeWord", FakeMicro),
         patch("linux_voice_assistant.__main__.OpenWakeWord", FakeOpen),
@@ -89,6 +95,20 @@ def run_once(tmp_path, family, monitoring, satellite=True, active=False, channel
     if monitoring:
         bus._drain()
     return raw, primary, secondary, fake_satellite, deliveries
+
+
+@pytest.mark.parametrize("family", ["micro", "open"])
+@pytest.mark.parametrize("monitoring", ["slow", "disconnected"])
+def test_diagnostic_backpressure_and_disconnect_preserve_detection_without_copying(tmp_path, family, monitoring):
+    _, baseline_primary, baseline_secondary, baseline_satellite, _ = run_once(tmp_path, family, False)
+    with patch("linux_voice_assistant.__main__.np.ascontiguousarray", side_effect=AssertionError("Unexpected diagnostic copy")) as copy:
+        _, primary, secondary, satellite, events = run_once(tmp_path, family, monitoring)
+    copy.assert_not_called()
+    assert primary.calls == baseline_primary.calls == 2
+    assert secondary.calls == baseline_secondary.calls == 2
+    assert satellite.audio == baseline_satellite.audio
+    assert satellite.wakeups == baseline_satellite.wakeups == 1
+    assert all(not event.input_bytes and not event.scores for event in events)
 
 
 @pytest.mark.parametrize("family", ["micro", "open"])
@@ -131,6 +151,16 @@ def test_active_pipeline_suppresses_accepted_marker(tmp_path):
     assert satellite.wakeups == 0
     assert events[0].scores[1]["crossing"] is True
     assert events[0].scores[1]["accepted"] is False
+
+
+def test_micro_probability_none_and_equal_cutoff_preserve_boolean_semantics(tmp_path):
+    for monitoring in (False, True):
+        _, primary, _, satellite, events = run_once(tmp_path, "micro", monitoring, probabilities=[None, 0.7, 0.8])
+        assert primary.calls == 3
+        assert satellite.wakeups == 1
+        if monitoring:
+            assert [score["probability"] for score in events[0].scores] == [0.7, 0.8]
+            assert [score["crossing"] for score in events[0].scores] == [False, True]
 
 
 @pytest.mark.parametrize("mute_during_second", [False, True])

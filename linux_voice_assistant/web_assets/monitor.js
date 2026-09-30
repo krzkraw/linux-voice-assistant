@@ -42,6 +42,7 @@ export class AudioMonitor {
     this.muted = false;
     this.monitoring = false;
     this.requested = false;
+    this.startGeneration = 0;
     this.playing = false;
     this.sources = [];
     this.nextSample = null;
@@ -58,6 +59,9 @@ export class AudioMonitor {
 
   async start() {
     if (this.requested || this.monitoring) return;
+    const generation = ++this.startGeneration;
+    this.requested = true;
+    this.updateButtons();
     try {
       if (!this.context) {
         this.context = new AudioContext();
@@ -66,15 +70,23 @@ export class AudioMonitor {
         this.gain.connect(this.context.destination);
       }
       await this.context.resume();
+      if (generation !== this.startGeneration) return;
+      if (document.hidden) { this.stop(false); return; }
       this.outputRate.textContent = String(this.context.sampleRate);
       if (!this.send({ command: 'monitor_start' })) throw new Error('WebUI connection unavailable');
       this.requested = true;
       this.status.textContent = 'Starting…';
       this.updateButtons();
-    } catch (error) { this.status.textContent = error.message; }
+    } catch (error) {
+      if (generation !== this.startGeneration) return;
+      this.requested = false;
+      this.status.textContent = error.message;
+      this.updateButtons();
+    }
   }
 
   stop(send = true) {
+    this.startGeneration++;
     if (send && (this.monitoring || this.requested)) this.send({ command: 'monitor_stop' });
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
@@ -87,6 +99,7 @@ export class AudioMonitor {
   }
 
   disconnected() {
+    this.startGeneration++;
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
     this.resetPlayback();
