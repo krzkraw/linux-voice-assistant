@@ -24,13 +24,17 @@
         <canvas id="score-graph" role="img" aria-label="Primary wake-word scores, threshold, accepted activations, and audio gaps"></canvas>
         <div class="monitor-meta"><span id="monitor-model">—</span><span>Threshold <strong id="monitor-threshold">—</strong></span><span>Revision <strong id="monitor-revision">—</strong></span></div>
       </section>
+      <section class="audio-section" aria-labelledby="audio-title">
+        <div class="section-heading"><h2 id="audio-title">Audio level <small>dBFS</small></h2><div class="graph-legend"><span class="input-series">┄ Input</span><span class="processed-series">━ Processed</span></div></div>
+        <canvas id="level-graph" role="img" aria-label="Input (dotted) and processed (solid) block peaks in dBFS over 30 seconds, aligned with wake scores"></canvas>
+      </section>
       <section class="microphone-section" aria-labelledby="microphone-title">
         <h2 id="microphone-title">Microphone</h2>
         <div class="microphone-layout">
           <div class="sliders">
-            <div class="control"><label for="mic_volume">Volume <output id="mic_volume-value"></output></label><input id="mic_volume" type="range" min="1" max="100" step="1"></div>
-            <div class="control"><label for="mic_auto_gain">Auto gain <output id="mic_auto_gain-value"></output></label><input id="mic_auto_gain" type="range" min="0" max="31" step="1"></div>
-            <div class="control"><label for="mic_noise_suppression">Noise suppression <output id="mic_noise_suppression-value"></output></label><input id="mic_noise_suppression" type="range" min="0" max="4" step="1"></div>
+            <div class="control"><label for="mic_volume">Volume</label><input id="mic_volume" type="range" min="1" max="100" step="1" aria-orientation="vertical"><output id="mic_volume-value" for="mic_volume"></output></div>
+            <div class="control"><label for="mic_auto_gain">Auto gain</label><input id="mic_auto_gain" type="range" min="0" max="31" step="1" aria-orientation="vertical"><output id="mic_auto_gain-value" for="mic_auto_gain"></output></div>
+            <div class="control"><label for="mic_noise_suppression">Noise suppression</label><input id="mic_noise_suppression" type="range" min="0" max="4" step="1" aria-orientation="vertical"><output id="mic_noise_suppression-value" for="mic_noise_suppression"></output></div>
           </div>
           <div class="level-meters" aria-label="Live audio peaks">
             <div class="level-meter"><label for="input-meter">Input</label><div class="meter-track"><meter id="input-meter" min="-90" max="0" low="-12" high="-3" optimum="-90" value="-90" aria-label="Input peak in dBFS"></meter></div><strong id="input-level">—</strong><small id="input-clips">—</small></div>

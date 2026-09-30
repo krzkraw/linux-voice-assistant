@@ -26,6 +26,7 @@ export class AudioMonitor {
     this.feedSelect = document.getElementById('listen-feed');
     this.volume = document.getElementById('listen-volume');
     this.canvas = document.getElementById('score-graph');
+    this.levelCanvas = document.getElementById('level-graph');
     this.status = document.getElementById('monitor-status');
     this.gaps = document.getElementById('gap-count');
     this.sourceRate = document.getElementById('source-rate');
@@ -35,6 +36,9 @@ export class AudioMonitor {
     this.clips = { input: document.getElementById('input-clips'), processed: document.getElementById('processed-clips') };
     this.streams = { input: [], processed: [] };
     this.scores = [];
+    this.levelHistory = { input: [], processed: [] };
+    this.levelNewest = 0;
+    this.levelSegment = 0;
     this.gapMarks = [];
     this.gapCount = 0;
     this.epoch = -1;
@@ -128,6 +132,7 @@ export class AudioMonitor {
   message(message) {
     if (message.type === 'monitor') {
       if (!message.active) { this.stop(false); return; }
+      if (message.epoch !== this.epoch) { this.resetPlayback(); this.clearHistory(); }
       this.epoch = message.epoch;
       this.streamId = message.stream_id;
       this.monitoring = true;
@@ -159,7 +164,7 @@ export class AudioMonitor {
     if (!this.monitoring || this.muted) return;
     let frame;
     try { frame = decodeFrame(buffer); } catch { this.markGap(); return; }
-    if (frame.epoch !== this.epoch) return;
+    if (frame.epoch !== this.epoch || !frame.data.length) return;
     const previous = this.streams[frame.feed].at(-1);
     if (frame.gap || (previous && frame.start !== previous.end)) {
       this.markGap(frame.start);
@@ -169,7 +174,9 @@ export class AudioMonitor {
     stream.push(frame);
     const floor = frame.end - SECOND;
     while (stream.length && stream[0].end <= floor) stream.shift();
-    this.meter(frame);
+    this.levelHistory[frame.feed].push({ start: frame.start, end: frame.end, level: this.meter(frame), segment: this.levelSegment });
+    this.levelNewest = Math.max(this.levelNewest, frame.end);
+    for (const feed of ['input', 'processed']) this.levelHistory[feed] = this.levelHistory[feed].filter(point => point.end > this.levelNewest - HISTORY);
     if (frame.feed === this.feedSelect.value) this.schedule();
   }
 
@@ -242,6 +249,9 @@ export class AudioMonitor {
 
   clearHistory() {
     this.scores = [];
+    this.levelHistory = { input: [], processed: [] };
+    this.levelNewest = 0;
+    this.levelSegment = 0;
     this.gapMarks = [];
     this.gapCount = 0;
     this.gaps.textContent = '0';
@@ -249,6 +259,7 @@ export class AudioMonitor {
   }
 
   markGap(sample) {
+    this.levelSegment++;
     this.gapCount += 1;
     this.gaps.textContent = String(this.gapCount);
     if (Number.isFinite(sample)) this.gapMarks.push(sample);
@@ -268,6 +279,7 @@ export class AudioMonitor {
     this.meters[frame.feed].value = Math.max(-90, Math.min(0, db));
     this.levels[frame.feed].textContent = `${peak > 0 ? db.toFixed(1) : '−∞'} dBFS`;
     this.clips[frame.feed].textContent = `${clips} clipped`;
+    return Math.max(-90, Math.min(0, db));
   }
 
   animate() {
@@ -277,21 +289,13 @@ export class AudioMonitor {
   }
 
   draw() {
-    const canvas = this.canvas;
-    const width = canvas.clientWidth || 600;
-    const height = canvas.clientHeight || 220;
-    const ratio = devicePixelRatio || 1;
-    if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) { canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio); }
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#101418'; ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = '#314a59'; ctx.beginPath(); ctx.moveTo(0, height - 22); ctx.lineTo(width, height - 22); ctx.stroke();
-    const right = this.playCursor() ?? this.scores.at(-1)?.at_sample ?? 0;
+    const { ctx, width, height } = this.prepareCanvas(this.canvas);
+    ctx.strokeStyle = '#314a59'; ctx.beginPath(); ctx.moveTo(36, height - 22); ctx.lineTo(width, height - 22); ctx.stroke();
+    const right = this.playCursor() ?? Math.max(this.scores.at(-1)?.at_sample ?? 0, this.levelNewest);
     const left = right - HISTORY;
-    const x = sample => (sample - left) / HISTORY * width;
+    const x = sample => 36 + (sample - left) / HISTORY * (width - 36);
     const y = probability => 16 + (1 - probability) * (height - 38);
-    ctx.strokeStyle = '#d7a259'; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(0, y(this.threshold)); ctx.lineTo(width, y(this.threshold)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = '#d7a259'; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(36, y(this.threshold)); ctx.lineTo(width, y(this.threshold)); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = '#7fdcca';
     for (const score of this.scores) {
       const pointX = x(score.at_sample);
@@ -303,6 +307,53 @@ export class AudioMonitor {
     for (const sample of this.gapMarks) { const pointX = x(sample); if (pointX >= 0 && pointX <= width) { ctx.beginPath(); ctx.moveTo(pointX, 0); ctx.lineTo(pointX, height); ctx.stroke(); } }
     ctx.fillStyle = '#a6bac8'; ctx.font = '12px system-ui'; ctx.fillText('30 seconds', 12, height - 6); ctx.fillText('threshold', 12, Math.max(12, y(this.threshold) - 5));
     if (this.playing) { ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
+    this.drawLevels(right);
+  }
+
+  drawLevels(right) {
+    const { ctx, width, height } = this.prepareCanvas(this.levelCanvas);
+    const left = right - HISTORY;
+    const x = sample => 36 + (sample - left) / HISTORY * (width - 36);
+    const y = level => 16 - level / 90 * (height - 38);
+    ctx.font = '11px system-ui';
+    for (const level of [0, -30, -60, -90]) {
+      ctx.strokeStyle = '#29343a'; ctx.beginPath(); ctx.moveTo(36, y(level)); ctx.lineTo(width, y(level)); ctx.stroke();
+      ctx.fillStyle = '#8e9da6'; ctx.fillText(String(level), 4, y(level) + 4);
+    }
+    ctx.lineWidth = 1.5;
+    for (const feed of ['processed', 'input']) {
+      ctx.strokeStyle = feed === 'input' ? '#75cbb5' : '#d7a259';
+      ctx.setLineDash(feed === 'input' ? [2, 4] : []);
+      ctx.beginPath();
+      let previous;
+      for (const point of this.levelHistory[feed]) {
+        if (point.end < left || point.start > right) continue;
+        const startX = x(Math.max(left, point.start));
+        const endX = x(Math.min(right, point.end));
+        if (previous && previous.end === point.start && previous.segment === point.segment) ctx.lineTo(startX, y(point.level));
+        else ctx.moveTo(startX, y(point.level));
+        ctx.lineTo(endX, y(point.level));
+        previous = point;
+      }
+      ctx.stroke();
+    }
+    ctx.setLineDash([]); ctx.lineWidth = 1;
+    ctx.strokeStyle = '#e17878';
+    for (const sample of this.gapMarks) { const pointX = x(sample); if (pointX >= 36 && pointX <= width) { ctx.beginPath(); ctx.moveTo(pointX, 0); ctx.lineTo(pointX, height); ctx.stroke(); } }
+    ctx.fillStyle = '#8e9da6'; ctx.fillText('30 seconds', 36, height - 6);
+    if (this.playing) { ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
+  }
+
+  prepareCanvas(canvas) {
+    const width = canvas.clientWidth || 600;
+    const height = canvas.clientHeight || 220;
+    const ratio = devicePixelRatio || 1;
+    if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) { canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio); }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#101418'; ctx.fillRect(0, 0, width, height);
+    return { ctx, width, height };
   }
 
   updateButtons() {

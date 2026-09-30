@@ -129,7 +129,7 @@ Listening volume controls browser output only.
 Browser playback can resample to the output device rate, which the page displays beside the source rate.
 Playback starts after approximately 250 ms of buffered samples and schedules at most one second ahead.
 Feed switching uses the current playback sample position.
-The score cursor follows scheduled playback; it does not measure acoustic output latency.
+Both charts follow the same scheduled playback cursor; it does not measure acoustic output latency.
 
 Every primary openWakeWord score is exported, including misses.
 microWakeWord exports available probabilities using the same strict `probability > threshold` comparison as detection.
@@ -138,9 +138,13 @@ Refractory periods or an active assistant pipeline can suppress activation.
 Without an HA connection, audio remains available while detector inference waits for HA.
 
 Levels and clipping counts describe the latest received frame.
+The microphone volume, auto gain, and noise suppression controls are vertical native sliders; higher values appear upward.
+The audio level chart shows block peaks on a −90..0 dBFS scale, with dotted Input and solid Processed lines.
+Each peak covers its source sample interval; unequal block sizes retain their original alignment.
+Gaps break both series; mute, Stop, disconnect, model changes, and epoch resets clear their history.
 Raw samples with absolute value at least 1 and processed samples at either PCM rail count as clipped.
 These counts do not identify distortion already introduced upstream.
-The browser retains a rolling feed buffer and 30 seconds of scores in RAM.
+The browser retains a rolling feed buffer, 30 seconds of scores, and 30 seconds of block peaks in RAM.
 LVA does not save recordings or diagnostic sessions.
 
 Mute cancels scheduled playback and clears server queues and browser history.
