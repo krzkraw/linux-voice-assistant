@@ -63,6 +63,8 @@ output { float: right; color: var(--primary); font-variant-numeric: tabular-nums
 input[type=range] { display: block; width: 100%; margin: 0; accent-color: var(--primary); cursor: pointer; }
 .console-row input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 24px; height: 180px; }
 input[type=checkbox] { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
+.level-meters { grid-column: span 2; display: grid; grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr); gap: 6px; text-align: center; }
+.meter-scale { display: flex; flex-direction: column; justify-content: space-between; height: 180px; margin-top: 42px; color: var(--muted); font-size: .65rem; font-variant-numeric: tabular-nums; }
 .level-meter label { display: flex; align-items: center; justify-content: center; height: 32px; color: var(--muted); margin-bottom: 10px; }
 .meter-track { display: flex; align-items: center; justify-content: center; height: 180px; }
 meter { flex-shrink: 0; width: 180px; height: 16px; transform: rotate(-90deg); }

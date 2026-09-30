@@ -35,8 +35,11 @@
             <div class="control"><label for="mic_auto_gain">Auto gain</label><input id="mic_auto_gain" type="range" min="0" max="31" step="1" aria-orientation="vertical"><output id="mic_auto_gain-value" for="mic_auto_gain"></output></div>
             <div class="control"><label for="mic_noise_suppression">Noise suppression</label><input id="mic_noise_suppression" type="range" min="0" max="4" step="1" aria-orientation="vertical"><output id="mic_noise_suppression-value" for="mic_noise_suppression"></output></div>
             <div class="control"><label for="primary_threshold">Threshold</label><input id="primary_threshold" type="range" min="0" max="1" step="0.001" aria-orientation="vertical"><output id="primary_threshold-value" for="primary_threshold"></output></div>
-            <div class="level-meter"><label for="input-meter">Input</label><div class="meter-track"><meter id="input-meter" min="-90" max="0" low="-12" high="-3" optimum="-90" value="-90" aria-label="Input peak in dBFS"></meter></div><strong id="input-level">—</strong><small id="input-clips">—</small></div>
-            <div class="level-meter"><label for="processed-meter">Processed</label><div class="meter-track"><meter id="processed-meter" min="-90" max="0" low="-12" high="-3" optimum="-90" value="-90" aria-label="Processed peak in dBFS"></meter></div><strong id="processed-level">—</strong><small id="processed-clips">—</small></div>
+            <div class="level-meters" aria-label="Live audio peaks">
+              <div class="level-meter"><label for="input-meter">Input</label><div class="meter-track"><meter id="input-meter" min="-90" max="0" low="-12" high="-3" optimum="-90" value="-90" aria-label="Input peak in dBFS"></meter></div><strong id="input-level">—</strong><small id="input-clips">—</small></div>
+              <div class="meter-scale" aria-hidden="true"><span>0</span><span>−18</span><span>−36</span><span>−54</span><span>−72</span><span>−90</span></div>
+              <div class="level-meter"><label for="processed-meter">Processed</label><div class="meter-track"><meter id="processed-meter" min="-90" max="0" low="-12" high="-3" optimum="-90" value="-90" aria-label="Processed peak in dBFS"></meter></div><strong id="processed-level">—</strong><small id="processed-clips">—</small></div>
+            </div>
             <div class="control"><label for="listen-volume">Listening volume</label><input id="listen-volume" type="range" min="0" max="200" step="1" value="50" aria-orientation="vertical"><output id="listen-volume-value" for="listen-volume">50</output></div>
         </div>
       </section>
