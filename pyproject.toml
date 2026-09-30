@@ -38,6 +38,7 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
+webui = ["aiohttp>=3.10,<4"]
 dev = [
     "black",
     "flake8",
@@ -63,6 +64,9 @@ include-package-data = true
 [tool.setuptools.packages.find]
 include = ["linux_voice_assistant", "linux_voice_assistant.*"]
 exclude = ["tests", "tests.*"]
+
+[tool.setuptools.package-data]
+linux_voice_assistant = ["web_assets/*.html", "web_assets/*.css", "web_assets/*.js"]
 
 [tool.black]
 line-length = 200

@@ -59,10 +59,11 @@ COPY version_githash.txt ./
 
 ### Run installation:
 RUN chmod +x docker-entrypoint.sh
-RUN ./script/setup
+RUN ./script/setup && ./.venv/bin/pip install '.[webui]'
 
 ### Set ports for ESPHome API:
 EXPOSE 6053
+EXPOSE 6056
 
 ### Set start script:
 ENTRYPOINT ["./docker-entrypoint.sh"]

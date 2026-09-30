@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LVA Audio Tuning</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div><span class="eyebrow">LINUX VOICE ASSISTANT</span><h1>Audio tuning</h1></div>
+      <div class="status"><span id="connection" class="dot"></span><span id="connection-text">Connecting</span></div>
+    </header>
+    <section id="login" class="card" hidden>
+      <h2>Sign in</h2>
+      <p>Enter the password from this device's private WebUI password file.</p>
+      <form id="login-form"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form>
+      <p id="login-error" class="error" role="alert"></p>
+    </section>
+    <div id="controls" hidden>
+      <section class="intro"><p>Adjust the microphone and primary wake word. Changes save when you release a slider.</p><button id="logout" class="quiet" type="button">Sign out</button></section>
+      <div class="grid">
+        <section class="card"><span class="eyebrow">INPUT</span><h2>Microphone</h2>
+          <div class="control"><label for="mic_volume">Volume <output id="mic_volume-value"></output></label><input id="mic_volume" type="range" min="1" max="100" step="1"></div>
+          <div class="control"><label for="mic_auto_gain">Auto gain <output id="mic_auto_gain-value"></output></label><input id="mic_auto_gain" type="range" min="0" max="31" step="1"></div>
+          <div class="control"><label for="mic_noise_suppression">Noise suppression <output id="mic_noise_suppression-value"></output></label><input id="mic_noise_suppression" type="range" min="0" max="4" step="1"></div>
+        </section>
+        <section class="card"><span class="eyebrow">DETECTION</span><h2>Wake word</h2>
+          <div class="control"><label for="primary_model">Primary model</label><select id="primary_model"></select></div>
+          <div class="control"><label for="primary_threshold">Threshold <output id="primary_threshold-value"></output></label><input id="primary_threshold" type="range" min="0" max="1" step="0.001"></div>
+          <div class="control mute-row"><div><label for="muted">Mute assistant</label><small>Suppresses wake activation and voice input to Home Assistant.</small></div><input id="muted" type="checkbox"></div>
+        </section>
+      </div>
+      <p id="message" role="status"></p>
+    </div>
+  </main>
+</body>
+</html>

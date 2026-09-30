@@ -214,6 +214,11 @@ async def main() -> None:
         action="store_true",
         help="Disable the peripheral WebSocket API entirely",
     )
+    parser.add_argument("--web-ui-enabled", action="store_true", help="Enable the optional settings WebUI")
+    parser.add_argument("--web-ui-host", default="127.0.0.1", help="WebUI bind address (default: 127.0.0.1)")
+    parser.add_argument("--web-ui-port", type=int, default=6056, help="WebUI port (default: 6056)")
+    parser.add_argument("--web-ui-password-file", type=Path, help="Path to a private WebUI password file")
+    parser.add_argument("--web-ui-auth-bypass-cidrs", default="", help="Comma-separated trusted client IPs or CIDRs")
     parser.add_argument(
         "--peripheral-startup-wait",
         type=float,
@@ -476,6 +481,8 @@ async def main() -> None:
     if args.enable_thinking_sound or args.mic_auto_gain or args.mic_noise_suppression:
         state.save_preferences()
 
+    state.refresh_primary_threshold()
+
     initial_volume_percent = int(round(initial_volume * 100))
     state.music_player.set_volume(initial_volume_percent)
     state.tts_player.set_volume(initial_volume_percent)
@@ -550,6 +557,17 @@ async def main() -> None:
                 )
                 sys.exit(1)
 
+    web_ui = None
+    if args.web_ui_enabled:
+        try:
+            from .web_ui import WebUI
+
+            web_ui = WebUI(state, args.web_ui_host, args.web_ui_port, args.web_ui_password_file, args.web_ui_auth_bypass_cidrs)
+            await web_ui.start()
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.error("WebUI disabled: %s", exc, exc_info=True)
+            web_ui = None
+
     # ------------------------------------------------------------------
     # Audio processing thread
     # ------------------------------------------------------------------
@@ -601,6 +619,8 @@ async def main() -> None:
         process_audio_thread.join()
         if peripheral_api is not None:
             await peripheral_api.stop()
+        if web_ui is not None:
+            await web_ui.stop()
 
     _LOGGER.debug("Server stopped")
 
@@ -644,7 +664,7 @@ def process_audio(state: ServerState, mic, block_size: int):
     """Process audio chunks from the microphone."""
     n_channels = state.audio_input_channels
 
-    wake_words: List[Union[MicroWakeWord, OpenWakeWord]] = []
+    wake_words: List[tuple[int, Union[MicroWakeWord, OpenWakeWord]]] = []
     micro_features: Optional[MicroWakeWordFeatures] = None
     micro_inputs: List[np.ndarray] = []
 
@@ -693,12 +713,15 @@ def process_audio(state: ServerState, mic, block_size: int):
                 if (not wake_words) or (state.wake_words_changed and state.wake_words):
                     # Update list of wake word models to process
                     state.wake_words_changed = False
-                    wake_words = [ww for ww in state.wake_words.values() if ww.id in state.active_wake_words]
+                    slots = (state.preferences.active_wake_words + [None, None])[:2]
+                    ordered_ids = [(idx, word_id) for idx, word_id in enumerate(slots) if word_id in state.active_wake_words and word_id in state.wake_words]
+                    ordered_ids.extend((idx, word_id) for idx, word_id in enumerate(state.wake_words, start=2) if word_id in state.active_wake_words and word_id not in slots)
+                    wake_words = [(idx, state.wake_words[word_id]) for idx, word_id in ordered_ids]
 
                     # TODO: Load default stop word value from json into state and preferences missing.
 
                     has_oww = False
-                    for idx, wake_word in enumerate(wake_words):
+                    for idx, wake_word in wake_words:
 
                         # Load default threshold from model json
                         wake_word_id = wake_word.id if hasattr(wake_word, "id") else next(iter(state.wake_words.keys()))
@@ -786,7 +809,7 @@ def process_audio(state: ServerState, mic, block_size: int):
                         oww_inputs.clear()
                         oww_inputs.extend(oww_features.process_streaming(audio_chunk))
 
-                    for wake_word_index, wake_word in enumerate(wake_words):
+                    for wake_word_index, wake_word in wake_words:
                         activated = False
 
                         # Set dynamic threshold depending on wake word index

@@ -515,13 +515,7 @@ class VoiceSatelliteProtocol(APIServer):
         self._emit(LVAEvent.BUTTON_LOCK_CHANGED, {"locked": self.state.button_controls_locked})
 
     def _set_sensitivity_1(self, new_value: float) -> None:
-        self.state.wake_word_1_threshold = float(new_value)
-        self.state.preferences.wake_word_1_sensitivity = float(new_value)
-        self.state.save_preferences()
-        _LOGGER.debug("Wake Word 1 Sensitivity value set to: %s", new_value)
-        # Sync entity state
-        if self.state.sensitivity_1_number_entity is not None:
-            self.state.sensitivity_1_number_entity.sync_with_state()
+        self.state.update_setting("wake_word_1_threshold", new_value)
 
     def _set_sensitivity_2(self, new_value: float) -> None:
         self.state.wake_word_2_threshold = float(new_value)
@@ -543,6 +537,9 @@ class VoiceSatelliteProtocol(APIServer):
 
     def _set_muted(self, new_state: bool) -> None:
         self.state.muted = bool(new_state)
+        if self.state.mute_switch_entity is not None:
+            self.state.broadcast_entity_state(self.state.mute_switch_entity)
+        self.state.notify_settings_changed()
         self._emit(LVAEvent.MUTED, {"muted": self.state.muted})
 
         if self.state.muted:
@@ -798,6 +795,7 @@ class VoiceSatelliteProtocol(APIServer):
             # Change active wake words
             active_wake_words: Set[str] = set()
             new_wake_words: List[Optional[str]] = [None, None]
+            loaded_models = self.state.wake_words.copy()
 
             # Get old positions before modification
             old_positions: Dict[str, int] = {}
@@ -807,7 +805,7 @@ class VoiceSatelliteProtocol(APIServer):
 
             # Process new active wake words
             for wake_word_id in msg.active_wake_words:
-                if wake_word_id in self.state.wake_words:
+                if wake_word_id in loaded_models:
                     # Already active
                     active_wake_words.add(wake_word_id)
                 else:
@@ -825,7 +823,7 @@ class VoiceSatelliteProtocol(APIServer):
                         self.state.available_wake_words[wake_word_id] = model_info
 
                     _LOGGER.debug("Loading wake word: %s", model_info.wake_word_path)
-                    self.state.wake_words[wake_word_id] = model_info.load()
+                    loaded_models[wake_word_id] = model_info.load()
 
                     _LOGGER.info("Wake word set: %s", wake_word_id)
                     active_wake_words.add(wake_word_id)
@@ -853,13 +851,9 @@ class VoiceSatelliteProtocol(APIServer):
             # If only one wake word is left and it was at position 1, position 0 remains None
             # Position 2 automatically stays None if not occupied
 
-            self.state.active_wake_words = active_wake_words
             _LOGGER.debug("Active wake words: %s", active_wake_words)
             _LOGGER.debug("Wake word positions: [0]=%s, [1]=%s", new_wake_words[0], new_wake_words[1])
-
-            self.state.preferences.active_wake_words = new_wake_words
-            self.state.save_preferences()
-            self.state.wake_words_changed = True
+            self.state.apply_wake_configuration(new_wake_words, loaded_models)
 
     # ------------------------------------------------------------------
     # Audio streaming

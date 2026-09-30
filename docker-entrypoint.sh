@@ -136,6 +136,22 @@ if [ "$DISABLE_PERIPHERAL_API" = "1" ]; then
   EXTRA_ARGS+=( "--disable-peripheral-api" )
 fi
 
+if [ "${WEB_UI_ENABLED:-0}" = "1" ]; then
+  EXTRA_ARGS+=( "--web-ui-enabled" )
+fi
+if [ -n "${WEB_UI_HOST}" ]; then
+  EXTRA_ARGS+=( "--web-ui-host" "$WEB_UI_HOST" )
+fi
+if [ -n "${WEB_UI_PORT}" ]; then
+  EXTRA_ARGS+=( "--web-ui-port" "$WEB_UI_PORT" )
+fi
+if [ -n "${WEB_UI_PASSWORD_FILE}" ]; then
+  EXTRA_ARGS+=( "--web-ui-password-file" "$WEB_UI_PASSWORD_FILE" )
+fi
+if [ -n "${WEB_UI_AUTH_BYPASS_CIDRS}" ]; then
+  EXTRA_ARGS+=( "--web-ui-auth-bypass-cidrs" "$WEB_UI_AUTH_BYPASS_CIDRS" )
+fi
+
 if [ "$ENABLE_OUTPUT_ONLY" = "1" ]; then
   EXTRA_ARGS+=( "--output-only" )
 fi

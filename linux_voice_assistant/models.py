@@ -2,12 +2,15 @@
 
 import json
 import logging
+import math
+import os
+import tempfile
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from queue import Queue
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union
 
 if TYPE_CHECKING:
     from google.protobuf import message
@@ -185,6 +188,8 @@ class ServerState:
     audio_input_channels: int = 2  # number of mic channels to stream
     timer_max_ring_seconds: float = 900.0
     listen_during_wake_sound: bool = False
+    settings_revision: int = 0
+    settings_changed: Optional[Callable[[], None]] = None
 
     def broadcast(self, msgs: "Iterable[message.Message]") -> None:
         """Send messages to every connected API client.
@@ -201,17 +206,20 @@ class ServerState:
         for connection in list(self.connections):
             connection.send_messages(messages)
 
-    def save_preferences(self) -> None:
+    def save_preferences(self, preferences: Optional[Preferences] = None) -> None:
         """Save preferences as JSON."""
         _LOGGER.debug("Saving preferences: %s", self.preferences_path)
         self.preferences_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.preferences_path, "w", encoding="utf-8") as preferences_file:
-            json.dump(
-                asdict(self.preferences),
-                preferences_file,
-                ensure_ascii=False,
-                indent=4,
-            )
+        descriptor, temporary_path = tempfile.mkstemp(dir=self.preferences_path.parent, prefix=f".{self.preferences_path.name}.")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as preferences_file:
+                json.dump(asdict(preferences or self.preferences), preferences_file, ensure_ascii=False, indent=4)
+                preferences_file.flush()
+                os.fsync(preferences_file.fileno())
+            os.replace(temporary_path, self.preferences_path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     def persist_volume(self, volume: float) -> None:
         """Persist the normalized media volume (0.0 - 1.0)."""
@@ -247,34 +255,90 @@ class ServerState:
 
     def persist_mic_gain(self, gain: float) -> None:
         """Persist the microphone auto gain value."""
-        gain_int = int(gain)
-        if self.mic_auto_gain == gain_int and self.preferences.mic_auto_gain == gain_int:
-            return
-
-        self.mic_auto_gain = gain_int
-        self.preferences.mic_auto_gain = gain_int
-        self.save_preferences()
+        self.update_setting("mic_auto_gain", int(gain))
 
     def persist_mic_noise(self, noise: float) -> None:
         """Persist the microphone noise suppression value."""
-        noise_int = int(noise)
-        if self.mic_noise_suppression == noise_int and self.preferences.mic_noise_suppression == noise_int:
-            return
-
-        self.mic_noise_suppression = noise_int
-        self.preferences.mic_noise_suppression = noise_int
-        self.save_preferences()
+        self.update_setting("mic_noise_suppression", int(noise))
 
     def persist_mic_volume(self, volume: float) -> None:
         """Persist the microphone input volume (0–100)."""
-        volume_int = max(1, min(100, int(round(volume))))
-        if self.mic_volume == volume_int and self.preferences.mic_volume == volume_int:
-            return
+        self.update_setting("mic_volume", max(1, min(100, int(round(volume)))))
 
-        self.mic_volume = volume_int
-        self.preferences.mic_volume = volume_int
-        _LOGGER.info("Saving mic_volume %s to %s", volume_int, self.preferences_path)
-        self.save_preferences()
+    def update_setting(self, name: str, value: object) -> None:
+        """Validate and persist a shared microphone or primary threshold setting."""
+        limits = {"mic_volume": (1, 100), "mic_auto_gain": (0, 31), "mic_noise_suppression": (0, 4), "wake_word_1_threshold": (0.0, 1.0)}
+        if name not in limits or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("Invalid setting or value")
+        minimum, maximum = limits[name]
+        if not minimum <= value <= maximum or (name != "wake_word_1_threshold" and not float(value).is_integer()):
+            raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        effective = float(value) if name == "wake_word_1_threshold" else int(value)
+        preference_name = "wake_word_1_sensitivity" if name == "wake_word_1_threshold" else name
+        if getattr(self, name) == effective and getattr(self.preferences, preference_name) == effective:
+            return
+        candidate = replace(self.preferences)
+        setattr(candidate, preference_name, effective)
+        self.save_preferences(candidate)
+        setattr(self, name, effective)
+        setattr(self.preferences, preference_name, effective)
+        entity_name = {
+            "mic_volume": "mic_volume_entity",
+            "mic_auto_gain": "mic_gain_entity",
+            "mic_noise_suppression": "mic_noise_suppression_entity",
+            "wake_word_1_threshold": "sensitivity_1_number_entity",
+        }[name]
+        entity = getattr(self, entity_name)
+        if entity is not None:
+            self.broadcast_entity_state(entity)
+        self.notify_settings_changed()
+
+    def select_primary_wake_word(self, model_id: str) -> None:
+        """Change the primary model without changing the secondary or stop model."""
+        if model_id not in self.available_wake_words:
+            raise ValueError("Unknown wake word model")
+        slots = (self.preferences.active_wake_words + [None, None])[:2]
+        if slots[0] == model_id:
+            return
+        if slots[1] == model_id:
+            raise ValueError("The selected model is already the secondary wake word")
+        model = self.wake_words.get(model_id) or self.available_wake_words[model_id].load()
+        slots[0] = model_id
+        self.apply_wake_configuration(slots, {**self.wake_words, model_id: model})
+
+    def apply_wake_configuration(self, slots: List[Optional[str]], models: "Dict[str, Union[MicroWakeWord, OpenWakeWord]]") -> None:
+        """Persist active wake word slots before publishing them to the detector."""
+        if len(slots) != 2 or any(word_id is not None and word_id not in models for word_id in slots):
+            raise ValueError("Invalid active wake word configuration")
+        candidate = replace(self.preferences, active_wake_words=slots)
+        self.save_preferences(candidate)
+        stop_active = {self.stop_word.id} if self.stop_word.id in self.active_wake_words else set()
+        self.wake_words = models
+        self.active_wake_words = {word_id for word_id in slots if word_id is not None} | stop_active
+        self.preferences.active_wake_words = slots
+        self.refresh_primary_threshold()
+        self.wake_words_changed = True
+        if self.sensitivity_1_number_entity is not None:
+            self.broadcast_entity_state(self.sensitivity_1_number_entity)
+        self.notify_settings_changed()
+
+    def refresh_primary_threshold(self) -> None:
+        """Apply the primary model's default when no sensitivity was saved."""
+        slots = self.preferences.active_wake_words
+        if slots and slots[0] in self.available_wake_words:
+            self.wake_word_1_threshold = self.preferences.wake_word_1_sensitivity if self.preferences.wake_word_1_sensitivity is not None else self.available_wake_words[slots[0]].probability_cutoff
+
+    def notify_settings_changed(self) -> None:
+        """Publish a new effective settings revision."""
+        self.settings_revision += 1
+        if self.settings_changed is not None:
+            self.settings_changed()
+
+    def broadcast_entity_state(self, entity: "ESPHomeEntity") -> None:
+        """Synchronize and publish one entity's effective state."""
+        from aioesphomeapi.api_pb2 import SubscribeHomeAssistantStatesRequest  # type: ignore[attr-defined] # pylint: disable=no-name-in-module
+
+        self.broadcast(entity.handle_message(SubscribeHomeAssistantStatesRequest()))
 
 
 def initial_stop_word_threshold(saved_sensitivity: Optional[float]) -> float:
