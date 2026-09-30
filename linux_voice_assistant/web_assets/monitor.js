@@ -31,6 +31,7 @@ export class AudioMonitor {
     this.sourceRate = document.getElementById('source-rate');
     this.outputRate = document.getElementById('output-rate');
     this.levels = { input: document.getElementById('input-level'), processed: document.getElementById('processed-level') };
+    this.meters = { input: document.getElementById('input-meter'), processed: document.getElementById('processed-meter') };
     this.clips = { input: document.getElementById('input-clips'), processed: document.getElementById('processed-clips') };
     this.streams = { input: [], processed: [] };
     this.scores = [];
@@ -225,7 +226,14 @@ export class AudioMonitor {
   resetPlayback(clearBuffers = true) {
     for (const item of this.sources) { try { item.source.stop(); } catch { /* The source already ended. */ } }
     this.sources = [];
-    if (clearBuffers) this.streams = { input: [], processed: [] };
+    if (clearBuffers) {
+      this.streams = { input: [], processed: [] };
+      for (const feed of ['input', 'processed']) {
+        this.meters[feed].value = -90;
+        this.levels[feed].textContent = '—';
+        this.clips[feed].textContent = '—';
+      }
+    }
     this.playing = false;
     this.nextSample = null;
     this.nextTime = 0;
@@ -256,7 +264,9 @@ export class AudioMonitor {
       peak = Math.max(peak, level);
       if (frame.feed === 'input' ? level >= 1 : sample === -1 || sample === 32767 / 32768) clips++;
     }
-    this.levels[frame.feed].textContent = `${Math.round(peak * 100)}% peak`;
+    const db = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
+    this.meters[frame.feed].value = Math.max(-90, Math.min(0, db));
+    this.levels[frame.feed].textContent = `${peak > 0 ? db.toFixed(1) : '−∞'} dBFS`;
     this.clips[frame.feed].textContent = `${clips} clipped`;
   }
 
@@ -275,7 +285,7 @@ export class AudioMonitor {
     const ctx = canvas.getContext('2d');
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#101b25'; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#101418'; ctx.fillRect(0, 0, width, height);
     ctx.strokeStyle = '#314a59'; ctx.beginPath(); ctx.moveTo(0, height - 22); ctx.lineTo(width, height - 22); ctx.stroke();
     const right = this.playCursor() ?? this.scores.at(-1)?.at_sample ?? 0;
     const left = right - HISTORY;

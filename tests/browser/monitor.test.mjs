@@ -53,6 +53,20 @@ monitor.meter({ feed: 'input', data: new Float32Array([1, -1, .999, -.999]) });
 assert.equal(element('input-clips').textContent, '2 clipped');
 monitor.meter({ feed: 'processed', data: new Float32Array([32767 / 32768, -1, 32766 / 32768, -32767 / 32768]) });
 assert.equal(element('processed-clips').textContent, '2 clipped');
+for (const feed of ['input', 'processed']) {
+  monitor.meter({ feed, data: new Float32Array([.0001, -.0001]) });
+  assert.ok(Math.abs(element(`${feed}-meter`).value + 80) < .001);
+  assert.equal(element(`${feed}-level`).textContent, '-80.0 dBFS');
+  monitor.resetPlayback(false);
+  assert.equal(element(`${feed}-level`).textContent, '-80.0 dBFS');
+  monitor.meter({ feed, data: new Float32Array([0]) });
+  assert.equal(element(`${feed}-meter`).value, -90);
+  assert.equal(element(`${feed}-level`).textContent, '−∞ dBFS');
+}
+monitor.meter({ feed: 'input', data: new Float32Array([2, -2]) });
+assert.equal(element('input-meter').value, 0);
+assert.equal(element('input-level').textContent, '6.0 dBFS');
+assert.equal(element('input-clips').textContent, '2 clipped');
 await monitor.start();
 assert.deepEqual(commands, ['monitor_start']);
 assert.equal(monitor.gain.gain.value, 0);
@@ -74,8 +88,21 @@ monitor.message({ type: 'reset', epoch: 2, reason: 'mute' });
 assert.equal(monitor.streams.input.length, 0);
 assert.equal(monitor.streams.processed.length, 0);
 monitor.stop();
+for (const boundary of ['stop', 'disconnected', 'reset', 'gap', 'mute']) {
+  monitor.muted = false;
+  for (const feed of ['input', 'processed']) monitor.meter({ feed, data: new Float32Array([.25]) });
+  if (boundary === 'reset' || boundary === 'gap') monitor.message({ type: boundary, epoch: monitor.epoch, to_sample: 100 });
+  else if (boundary === 'mute') monitor.state({ primary_model: 'second', primary_threshold: .6, revision: 2, muted: true });
+  else monitor[boundary]();
+  for (const feed of ['input', 'processed']) {
+    assert.equal(element(`${feed}-meter`).value, -90, `${boundary} clears ${feed}`);
+    assert.equal(element(`${feed}-level`).textContent, '—');
+    assert.equal(element(`${feed}-clips`).textContent, '—');
+  }
+}
 assert.deepEqual(commands, ['monitor_start', 'monitor_stop']);
 assert.equal(monitor.sources.length, 0);
+monitor.muted = false;
 
 for (const end of ['stop', 'disconnected']) {
   let resume;
