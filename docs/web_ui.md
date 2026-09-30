@@ -125,11 +125,16 @@ Microphone hardware and the operating system may already have processed it.
 Processed audio contains the exact signed 16-bit PCM bytes supplied to wake-word feature extraction.
 LVA uses its existing capture and inference; monitoring adds neither a second microphone nor a second detector.
 
-Listening volume controls browser output only.
+Listening volume controls browser output only, from 0% to 200%, with a default of 50%.
+The browser gain ranges from 0 to 2; feed switching preserves the selected volume.
 Browser playback can resample to the output device rate, which the page displays beside the source rate.
 Playback starts after approximately 250 ms of buffered samples and schedules at most one second ahead.
 Feed switching uses the current playback sample position.
 Both charts follow the same scheduled playback cursor; it does not measure acoustic output latency.
+Graph window selects any whole number of seconds from 30 to 300 and applies to both charts.
+The default is 30 seconds; the selection lasts until the page reloads.
+Increasing the window reveals retained history without restarting monitoring.
+The view can show less history after a start or reset, until new samples accumulate.
 
 Every primary openWakeWord score is exported, including misses.
 microWakeWord exports available probabilities using the same strict `probability > threshold` comparison as detection.
@@ -138,7 +143,9 @@ Refractory periods or an active assistant pipeline can suppress activation.
 Without an HA connection, audio remains available while detector inference waits for HA.
 
 Levels and clipping counts describe the latest received frame.
-The microphone volume, auto gain, and noise suppression controls are vertical native sliders; higher values appear upward.
+The console uses vertical native sliders; higher values appear upward.
+The row order is Volume, Auto gain, Noise suppression, Threshold, Input meter, Processed meter, and Listening volume.
+Narrow screens wrap the controls in the same order.
 Both charts use the same responsive height.
 The audio level chart shows block peaks on a −90..0 dBFS scale.
 When overlapping levels differ by at most 2 dB, the chart shows only Input in the primary color.
@@ -149,7 +156,8 @@ Each peak covers its source sample interval; unequal block sizes retain their or
 Gaps break both series; mute, Stop, disconnect, model changes, and epoch resets clear their history.
 Raw samples with absolute value at least 1 and processed samples at either PCM rail count as clipped.
 These counts do not identify distortion already introduced upstream.
-The browser retains a rolling feed buffer, 30 seconds of scores, and 30 seconds of block peaks in RAM.
+The browser retains up to 300 seconds of scores and scalar block peaks in RAM, regardless of the selected graph window.
+Each PCM feed buffer retains at most one second; the graph history contains no PCM.
 LVA does not save recordings or diagnostic sessions.
 
 Appearance offers System, Light, and Dark modes with Violet, Sage, and Amber tonal presets.

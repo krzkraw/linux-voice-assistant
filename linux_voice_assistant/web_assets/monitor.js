@@ -1,6 +1,6 @@
 const RATE = 16000;
 const SECOND = RATE;
-const HISTORY = RATE * 30;
+const HISTORY = RATE * 300;
 
 export function levelIntervals(input, processed) {
   const intervals = [];
@@ -48,6 +48,9 @@ export class AudioMonitor {
     this.volume = document.getElementById('listen-volume');
     this.canvas = document.getElementById('score-graph');
     this.levelCanvas = document.getElementById('level-graph');
+    this.windowControl = document.getElementById('graph-window');
+    this.windowSeconds = 30;
+    this.windowControl.value = String(this.windowSeconds);
     this.status = document.getElementById('monitor-status');
     this.gaps = document.getElementById('gap-count');
     this.sourceRate = document.getElementById('source-rate');
@@ -81,6 +84,15 @@ export class AudioMonitor {
     this.stopButton.addEventListener('click', () => this.stop());
     this.feedSelect.addEventListener('change', () => this.switchFeed());
     this.volume.addEventListener('input', () => { if (this.gain) this.gain.gain.value = Number(this.volume.value) / 100; document.getElementById('listen-volume-value').value = this.volume.value; });
+    this.windowControl.addEventListener('input', () => {
+      const seconds = Number(this.windowControl.value);
+      if (!Number.isInteger(seconds) || seconds < 30 || seconds > 300) return;
+      this.windowSeconds = seconds;
+      this.draw();
+    });
+    const restoreWindow = () => { this.windowControl.value = String(this.windowSeconds); };
+    for (const event of ['change', 'blur']) this.windowControl.addEventListener(event, restoreWindow);
+    this.windowControl.addEventListener('keydown', event => { if (event.key === 'Enter') restoreWindow(); });
     this.updateButtons();
     this.draw();
   }
@@ -197,9 +209,13 @@ export class AudioMonitor {
     stream.push(frame);
     const floor = frame.end - SECOND;
     while (stream.length && stream[0].end <= floor) stream.shift();
+    if (stream[0].start < floor) {
+      stream[0].data = stream[0].data.slice(floor - stream[0].start);
+      stream[0].start = floor;
+    }
     this.levelHistory[frame.feed].push({ start: frame.start, end: frame.end, level: this.meter(frame), segment: this.levelSegment });
     this.levelNewest = Math.max(this.levelNewest, frame.end);
-    for (const feed of ['input', 'processed']) this.levelHistory[feed] = this.levelHistory[feed].filter(point => point.end > this.levelNewest - HISTORY);
+    for (const feed of ['input', 'processed']) while (this.levelHistory[feed][0]?.end <= this.levelNewest - HISTORY) this.levelHistory[feed].shift();
     if (frame.feed === this.feedSelect.value) this.schedule();
   }
 
@@ -314,8 +330,9 @@ export class AudioMonitor {
   draw() {
     const { ctx, width, height } = this.prepareCanvas(this.canvas);
     const right = this.playCursor() ?? Math.max(this.scores.at(-1)?.at_sample ?? 0, this.levelNewest);
-    const left = right - HISTORY;
-    const x = sample => 36 + (sample - left) / HISTORY * (width - 36);
+    const window = this.windowSeconds * RATE;
+    const left = right - window;
+    const x = sample => 36 + (sample - left) / window * (width - 36);
     const y = probability => 16 + (1 - probability) * (height - 38);
     ctx.font = '12px system-ui';
     for (const probability of [0, .25, .5, .75, 1]) {
@@ -332,22 +349,23 @@ export class AudioMonitor {
     }
     ctx.strokeStyle = this.colors.error;
     for (const sample of this.gapMarks) { const pointX = x(sample); if (pointX >= 36 && pointX <= width) { ctx.beginPath(); ctx.moveTo(pointX, 0); ctx.lineTo(pointX, height); ctx.stroke(); } }
-    ctx.fillStyle = this.colors.muted; ctx.fillText('30 seconds', 36, height - 6); ctx.fillText('threshold', 44, Math.max(12, y(this.threshold) - 5));
+    ctx.fillStyle = this.colors.muted; ctx.fillText(`${this.windowSeconds} seconds`, 36, height - 6); ctx.fillText('threshold', 44, Math.max(12, y(this.threshold) - 5));
     if (this.playing) { ctx.strokeStyle = this.colors['on-surface']; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
     this.drawLevels(right);
   }
 
   drawLevels(right) {
     const { ctx, width, height } = this.prepareCanvas(this.levelCanvas);
-    const left = right - HISTORY;
-    const x = sample => 36 + (sample - left) / HISTORY * (width - 36);
+    const window = this.windowSeconds * RATE;
+    const left = right - window;
+    const x = sample => 36 + (sample - left) / window * (width - 36);
     const y = level => 16 - Math.max(-90, Math.min(0, level)) / 90 * (height - 38);
     ctx.font = '12px system-ui';
     for (const level of [0, -15, -30, -45, -60, -75, -90]) {
       ctx.strokeStyle = this.colors.grid; ctx.beginPath(); ctx.moveTo(36, y(level)); ctx.lineTo(width, y(level)); ctx.stroke();
       ctx.fillStyle = this.colors.muted; ctx.fillText(String(level), 4, y(level) + 4);
     }
-    const intervals = levelIntervals(this.levelHistory.input, this.levelHistory.processed);
+    const intervals = levelIntervals(this.levelHistory.input.filter(point => point.end > left && point.start < right), this.levelHistory.processed.filter(point => point.end > left && point.start < right));
     ctx.fillStyle = this.colors.band;
     ctx.beginPath();
     for (const interval of intervals) {
@@ -378,7 +396,7 @@ export class AudioMonitor {
     ctx.setLineDash([]); ctx.lineWidth = 1;
     ctx.strokeStyle = this.colors.error;
     for (const sample of this.gapMarks) { const pointX = x(sample); if (pointX >= 36 && pointX <= width) { ctx.beginPath(); ctx.moveTo(pointX, 0); ctx.lineTo(pointX, height); ctx.stroke(); } }
-    ctx.fillStyle = this.colors.muted; ctx.fillText('30 seconds', 36, height - 6);
+    ctx.fillStyle = this.colors.muted; ctx.fillText(`${this.windowSeconds} seconds`, 36, height - 6);
     if (this.playing) { ctx.strokeStyle = this.colors['on-surface']; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
   }
 

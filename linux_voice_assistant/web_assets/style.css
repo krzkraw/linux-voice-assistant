@@ -42,6 +42,9 @@ section { padding: 22px 0; }
 .header-tools, .appearance { display: flex; align-items: center; gap: 12px; }
 .appearance select { width: auto; padding: 7px 9px; font-size: .8rem; }
 .graph-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: .8rem; }
+.graph-window { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .8rem; }
+.graph-window label { margin: 0; font-size: inherit; }
+.graph-window input { width: 5.5rem; }
 #score-graph, #level-graph { display: block; width: 100%; height: var(--chart-height); margin-top: 16px; }
 .audio-section { border-top: 1px solid var(--grid); }
 #audio-title small { display: inline; margin-left: 8px; font-weight: 400; }
@@ -50,18 +53,16 @@ section { padding: 22px 0; }
 .monitor-meta { display: flex; flex-wrap: wrap; gap: 20px; color: var(--muted); font-size: .75rem; margin-top: 10px; font-variant-numeric: tabular-nums; }
 .monitor-meta strong { font-weight: 500; }
 .microphone-section { border-top: 1px solid var(--grid); }
-.microphone-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 48px; margin-top: 20px; }
-.sliders { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.console-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 18px; margin-top: 20px; text-align: center; }
 .control { margin: 18px 0; min-width: 0; }
-.sliders .control { display: grid; grid-template-rows: 32px 180px 24px; gap: 10px; justify-items: center; margin: 0; text-align: center; }
-.sliders label { display: flex; align-items: center; justify-content: center; margin: 0; }
-.sliders output { float: none; }
+.console-row .control { display: grid; grid-template-rows: 32px 180px 24px; gap: 10px; justify-items: center; margin: 0; }
+.console-row label { display: flex; align-items: center; justify-content: center; margin: 0; }
+.console-row output { float: none; }
 label { display: block; font-size: .85rem; font-weight: 500; margin-bottom: 8px; }
 output { float: right; color: var(--primary); font-variant-numeric: tabular-nums; }
 input[type=range] { display: block; width: 100%; margin: 0; accent-color: var(--primary); cursor: pointer; }
-.sliders input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 24px; height: 180px; }
+.console-row input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 24px; height: 180px; }
 input[type=checkbox] { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
-.level-meters { display: grid; grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr); gap: 12px; text-align: center; }
 .level-meter label { display: flex; align-items: center; justify-content: center; height: 32px; color: var(--muted); margin-bottom: 10px; }
 .meter-track { display: flex; align-items: center; justify-content: center; height: 180px; }
 meter { flex-shrink: 0; width: 180px; height: 16px; transform: rotate(-90deg); }
@@ -72,9 +73,9 @@ meter::-webkit-meter-suboptimum-value { background: var(--accent); }
 meter::-webkit-meter-even-less-good-value { background: var(--error); }
 .level-meter strong { display: block; margin-top: 10px; font-size: .8rem; font-weight: 500; font-variant-numeric: tabular-nums; }
 .level-meter small { margin-top: 4px; font-size: .7rem; }
-.meter-scale { display: flex; flex-direction: column; justify-content: space-between; height: 180px; margin-top: 42px; color: var(--muted); font-size: .65rem; font-variant-numeric: tabular-nums; }
 .settings-row { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; border-top: 1px solid var(--grid); }
-select, input[type=password] { width: 100%; padding: 9px 11px; color: var(--on-surface); background: var(--surface); border: 1px solid var(--outline); border-radius: 4px; font: inherit; font-size: .85rem; }
+select, input[type=password], input[type=number] { padding: 9px 11px; color: var(--on-surface); background: var(--surface); border: 1px solid var(--outline); border-radius: 4px; font: inherit; font-size: .85rem; }
+select, input[type=password] { width: 100%; }
 small { display: block; color: var(--muted); font-size: .75rem; }
 .mute-row { display: flex; align-items: center; gap: 9px; margin: 18px 0 6px; }
 button { border: 0; border-radius: 4px; background: var(--primary); color: var(--on-primary); font: inherit; font-size: .8rem; font-weight: 650; padding: 9px 13px; cursor: pointer; }
@@ -99,8 +100,7 @@ footer { border-top: 1px solid var(--grid); padding-top: 12px; }
   :root { --chart-height: 230px; }
   .header-tools { width: 100%; justify-content: space-between; }
   .graph-legend { gap: 8px 12px; }
-  .microphone-layout { gap: 22px; }
-  .level-meters { gap: 6px; }
+  .console-row { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px 12px; }
   .settings-row { grid-template-columns: 1fr; gap: 0; }
   .settings-row > section + section { border-top: 1px solid var(--grid); }
 }
@@ -111,6 +111,5 @@ footer { border-top: 1px solid var(--grid); padding-top: 12px; }
   .level-meter small { font-size: .65rem; }
 }
 @media (max-width: 560px) {
-  .microphone-layout { grid-template-columns: 1fr; gap: 24px; }
-  .level-meters { width: 100%; max-width: 300px; justify-self: center; }
+  .console-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

@@ -3,10 +3,11 @@ import { AudioMonitor, decodeFrame, levelIntervals } from '../../linux_voice_ass
 
 const elements = new Map();
 function element(id) {
-  if (!elements.has(id)) elements.set(id, { value: id === 'listen-feed' ? 'input' : '0', textContent: '', disabled: false, addEventListener() {}, clientWidth: 600, clientHeight: 220, getContext: () => id === 'level-graph' ? levelCanvas : canvas });
+  if (!elements.has(id)) elements.set(id, { value: id === 'listen-feed' ? 'input' : id === 'graph-window' ? '30' : id === 'listen-volume' ? '50' : '0', textContent: '', disabled: false, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, clientWidth: 600, clientHeight: 220, getContext: () => id === 'level-graph' ? levelCanvas : canvas });
   return elements.get(id);
 }
-const canvas = { setTransform() {}, clearRect() {}, fillRect() {}, rect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {}, arc() {}, fill() {}, fillText() {} };
+const labels = [];
+const canvas = { setTransform() {}, clearRect() {}, fillRect() {}, rect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {}, arc() {}, fill() {}, fillText(text) { labels.push(text); } };
 let recordLevels = false;
 const levelPaths = [];
 const levelFills = [];
@@ -33,9 +34,10 @@ globalThis.AudioContext = class {
   sampleRate = 48000;
   currentTime = 0;
   destination = {};
-  async resume() {}
+  state = 'running';
+  async resume() { this.state = 'running'; }
   createGain() { return { gain: { value: 0 }, connect() {} }; }
-  createBuffer(_channels, count) { return { getChannelData: () => new Float32Array(count) }; }
+  createBuffer(_channels, count) { const data = new Float32Array(count); return { getChannelData: () => data }; }
   createBufferSource() {
     const source = { connect() {}, start(time) { started.push(time); }, stop() { this.stopped = true; } };
     return source;
@@ -83,6 +85,7 @@ monitor.meter({ feed: 'input', data: new Float32Array([2, -2]) });
 assert.equal(element('input-meter').value, 0);
 assert.equal(element('input-level').textContent, '6.0 dBFS');
 assert.equal(element('input-clips').textContent, '2 clipped');
+element('listen-volume').value = '0';
 await monitor.start();
 assert.deepEqual(commands, ['monitor_start']);
 assert.equal(monitor.gain.gain.value, 0);
@@ -139,10 +142,11 @@ for (let i = 0; i < 1000; i++) {
   monitor.message({ type: 'scores', epoch: 1, items: [{ at_sample: (i + 1) * 1024, probability: .2 }] });
 }
 assert.ok(monitor.streams.input.length <= 17 && monitor.streams.processed.length <= 17);
-assert.ok(monitor.scores.at(-1).at_sample - monitor.scores[0].at_sample <= 30 * 16000);
+assert.ok(monitor.scores.at(-1).at_sample - monitor.scores[0].at_sample <= 300 * 16000);
 for (const feed of ['input', 'processed']) {
-  assert.ok(monitor.levelHistory[feed].length <= 469);
-  assert.ok(monitor.levelHistory[feed][0].end > monitor.levelNewest - 30 * 16000);
+  assert.ok(monitor.levelHistory[feed].length <= 4688);
+  assert.ok(monitor.levelHistory[feed][0].end > monitor.levelNewest - 300 * 16000);
+  assert.ok(monitor.streams[feed].reduce((count, item) => count + item.data.length, 0) <= 16000);
 }
 monitor.state({ primary_model: 'first', primary_threshold: .7, revision: 1, muted: false });
 monitor.state({ primary_model: 'second', primary_threshold: .6, revision: 2, muted: false });
@@ -239,3 +243,115 @@ recordLevels = false;
 colors.primary = '#123456';
 document.listeners.appearancechange();
 assert.equal(historyMonitor.colors.primary, '#123456', 'Canvas colors refresh when appearance changes');
+
+const playback = new AudioMonitor(() => true);
+element('listen-volume').value = '100';
+for (let round = 0; round < 6; round++) {
+  element('listen-feed').value = round % 2 ? 'processed' : 'input';
+  await playback.start();
+  playback.message({ type: 'monitor', active: true, epoch: 1, sample_rate: 16000 });
+  let processedEnd = 0;
+  for (let block = 0; block < 160; block++) {
+    const start = block * 1024, end = start + 1024;
+    if (playback.context.state === 'running') playback.context.currentTime += block === 60 ? 2 : block % 3 === 0 ? .10 : .046;
+    playback.binary(frame(1, start));
+    // Match ProcessedTimeline: WebRTC emits 160-sample multiples split at capture boundaries.
+    const outputEnd = Math.floor(end / 160) * 160;
+    while (processedEnd < outputEnd) {
+      const count = Math.min(outputEnd - processedEnd, 1024 - processedEnd % 1024);
+      playback.binary(frame(2, processedEnd, count));
+      processedEnd += count;
+    }
+    if ([30, 80, 120].includes(block)) {
+      element('listen-feed').value = element('listen-feed').value === 'input' ? 'processed' : 'input';
+      playback.switchFeed();
+    }
+    if (block === 100) { playback.context.state = 'suspended'; }
+    if (block === 125) { await playback.context.resume(); }
+    if (block > 10 && !(block >= 100 && block < 134) && ![30, 80, 120].some(at => block >= at && block < at + 8)) {
+      assert.ok(playback.playing && playback.sources.some(item => item.endTime > playback.context.currentTime), `Playback schedules after jitter, pause, and resume: round ${round}, block ${block}`);
+      assert.ok(playback.sources.every(item => item.source.buffer.getChannelData(0).some(sample => sample !== 0)));
+      assert.ok(playback.sources.at(-1).endTime - playback.context.currentTime <= 1);
+    }
+  }
+  playback.stop(false);
+  assert.equal(playback.sources.length, 0);
+}
+console.log('Playback: six repeated starts, unequal processed segments, feed changes, 2-second delivery pauses, and resume pass; PCM is nonzero.');
+
+element('listen-volume').value = '50';
+const longHistory = new AudioMonitor(() => true);
+assert.equal(longHistory.windowSeconds, 30);
+const drawHistory = longHistory.draw.bind(longHistory);
+longHistory.draw = () => {};
+longHistory.message({ type: 'monitor', active: true, epoch: 1, sample_rate: 16000 });
+let processedEnd = 0;
+for (let block = 0; block < 5000; block++) {
+  const start = block * 1024, end = start + 1024;
+  longHistory.binary(frame(1, start));
+  const outputEnd = Math.floor(end / 160) * 160;
+  while (processedEnd < outputEnd) {
+    const count = Math.min(outputEnd - processedEnd, 1024 - processedEnd % 1024);
+    longHistory.binary(frame(2, processedEnd, count, 0, .5));
+    processedEnd += count;
+  }
+  longHistory.message({ type: 'scores', epoch: 1, items: [{ at_sample: end, probability: .2 }] });
+}
+assert.equal(longHistory.scores.length, 4688);
+for (const feed of ['input', 'processed']) {
+  const history = longHistory.levelHistory[feed], stream = longHistory.streams[feed];
+  assert.ok(history[0].end > longHistory.levelNewest - 300 * 16000);
+  assert.ok(history[0].start <= longHistory.levelNewest - 300 * 16000 + 1024);
+  assert.ok(history.every(item => !('data' in item)), 'Scalar history never retains PCM');
+  assert.ok(stream[0].start >= stream.at(-1).end - 16000);
+  assert.ok(stream.reduce((count, item) => count + item.data.length, 0) <= 16000);
+}
+const retained = longHistory.levelHistory.input.length;
+for (let seconds = 30; seconds <= 300; seconds++) {
+  element('graph-window').value = String(seconds);
+  element('graph-window').listeners.input();
+  assert.equal(longHistory.windowSeconds, seconds, 'Every whole second in the range is selectable');
+}
+for (const invalid of ['', '29', '301', 'NaN', '30.5']) {
+  element('graph-window').value = invalid;
+  element('graph-window').listeners.input();
+  assert.equal(longHistory.windowSeconds, 300);
+  for (const commit of ['change', 'blur', 'keydown']) {
+    element('graph-window').value = invalid;
+    element('graph-window').listeners[commit]({ key: 'Enter' });
+    assert.equal(element('graph-window').value, '300');
+  }
+}
+longHistory.draw = drawHistory;
+for (const seconds of [30, 137, 300]) {
+  labels.length = 0; levelPaths.length = 0; levelFills.length = 0; recordLevels = true;
+  element('graph-window').value = String(seconds);
+  element('graph-window').listeners.input();
+  assert.equal(labels.filter(label => label === `${seconds} seconds`).length, 2, 'Both charts show the same window');
+  const inputPath = levelPaths.at(-1).points;
+  assert.equal(inputPath[0].x, 36);
+  assert.equal(inputPath.at(-1).x, 600);
+  assert.ok(inputPath.every(item => item.x >= 36 && item.x <= 600));
+  assert.equal(longHistory.levelHistory.input.length, retained, 'Changing the view preserves retained history');
+}
+recordLevels = false;
+const renderStart = performance.now();
+for (let i = 0; i < 10; i++) longHistory.draw();
+console.log(`300-second synthetic render: ${longHistory.levelHistory.input.length} Input peaks, ${longHistory.levelHistory.processed.length} Processed peaks, ${(performance.now() - renderStart) / 10} ms per draw with mock Canvas.`);
+longHistory.stop(false);
+
+const amplified = new AudioMonitor(() => true);
+await amplified.start();
+assert.equal(amplified.gain.gain.value, .5, 'Listening gain defaults to 50%');
+amplified.message({ type: 'monitor', active: true, epoch: 1, sample_rate: 16000 });
+for (const volume of [0, 50, 100, 137, 200]) {
+  element('listen-volume').value = String(volume);
+  element('listen-volume').listeners.input();
+  assert.equal(amplified.gain.gain.value, volume / 100);
+  assert.equal(element('listen-volume-value').value, String(volume));
+  element('listen-feed').value = element('listen-feed').value === 'input' ? 'processed' : 'input';
+  amplified.switchFeed();
+  assert.equal(amplified.gain.gain.value, volume / 100);
+  assert.equal(element('listen-volume').value, String(volume));
+}
+amplified.stop(false);
