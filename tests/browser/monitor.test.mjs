@@ -44,14 +44,14 @@ globalThis.AudioContext = class {
   }
 };
 
-function frame(feed, start, count = 1024, flags = 0, sample = .25) {
+function frame(feed, start, count = 1024, flags = 0, sample = .25, epoch = 1) {
   const size = feed === 1 ? 4 : 2;
   const bytes = new ArrayBuffer(26 + count * size);
   const view = new DataView(bytes);
   view.setUint32(0, 0x4c564131);
   view.setUint8(4, feed);
   view.setUint8(5, flags);
-  view.setUint32(6, 1);
+  view.setUint32(6, epoch);
   view.setBigUint64(10, BigInt(start));
   view.setUint32(18, count);
   view.setUint32(22, 3);
@@ -207,6 +207,7 @@ for (const boundary of ['stop', 'disconnected', 'reset', 'epoch', 'mute', 'model
 }
 historyMonitor.stop(false);
 
+
 const point = (start, end, level, segment = 0) => ({ start, end, level, segment });
 for (const delta of [-2, 0, 2, 2.00001, -2.00001]) {
   const intervals = levelIntervals([point(0, 100, -40)], [point(0, 100, -40 + delta)]);
@@ -355,3 +356,41 @@ for (const volume of [0, 50, 100, 137, 200]) {
   assert.equal(element('listen-volume').value, String(volume));
 }
 amplified.stop(false);
+
+for (const parameter of ['volume', 'auto gain', 'noise suppression', 'threshold']) {
+  const tuning = new AudioMonitor(() => true);
+  tuning.state({ primary_model: 'first', primary_threshold: .7, revision: 1, muted: false });
+  tuning.message({ type: 'monitor', active: true, epoch: 1, sample_rate: 16000 });
+  tuning.binary(frame(1, 0));
+  tuning.binary(frame(2, 0, 480, 0, .5));
+  tuning.binary(frame(2, 480, 544, 0, .5));
+  tuning.message({ type: 'scores', epoch: 1, items: [{ at_sample: 1024, probability: .8, crossing: true, accepted: true }] });
+  const before = JSON.stringify({ levels: tuning.levelHistory, scores: tuning.scores });
+  if (parameter === 'threshold') {
+    tuning.state({ primary_model: 'first', primary_threshold: .5, revision: 2, muted: false });
+    assert.equal(tuning.threshold, .5);
+    assert.equal(tuning.epoch, 1);
+  } else {
+    // The server sends the reset reason before acknowledging the new epoch.
+    tuning.message({ type: 'reset', epoch: 2, reason: 'processor' });
+    tuning.message({ type: 'monitor', active: true, epoch: 2, start_sample: 1024, sample_rate: 16000 });
+    assert.deepEqual(tuning.streams, { input: [], processed: [] }, 'A tuning reset still flushes PCM');
+    assert.equal(tuning.levelSegment, 1);
+    tuning.binary(frame(1, 1024));
+    tuning.message({ type: 'scores', epoch: 1, items: [{ at_sample: 9999, probability: .1 }] });
+  }
+  assert.equal(JSON.stringify({ levels: tuning.levelHistory, scores: tuning.scores }), before, `${parameter} preserves both graphs and rejects old data`);
+  assert.equal(tuning.gapCount, 0, 'Normal tuning is not dropped audio');
+  const epoch = tuning.epoch;
+  tuning.binary(frame(1, 1024, 1024, 0, .125, epoch));
+  tuning.binary(frame(2, 1024, 480, 0, .5, epoch));
+  tuning.binary(frame(2, 1504, 544, 0, .5, epoch));
+  tuning.message({ type: 'scores', epoch, items: [{ at_sample: 2048, probability: .4 }] });
+  assert.deepEqual(tuning.scores.map(item => item.at_sample), [1024, 2048]);
+  assert.deepEqual(tuning.levelHistory.input.map(item => [item.start, item.end]), [[0, 1024], [1024, 2048]]);
+  recordLevels = true; levelPaths.length = 0;
+  tuning.drawLevels(2048);
+  assert.equal(levelPaths.at(-1).points.filter(item => item.move).length, parameter === 'threshold' ? 1 : 2, 'Processor changes break the line between old and new peaks');
+  recordLevels = false;
+  tuning.stop(false);
+}

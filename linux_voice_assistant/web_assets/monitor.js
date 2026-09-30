@@ -179,7 +179,8 @@ export class AudioMonitor {
     } else if (message.type === 'reset') {
       this.epoch = message.epoch;
       this.resetPlayback();
-      this.clearHistory();
+      if (message.reason === 'processor' && !this.muted) this.levelSegment++;
+      else this.clearHistory();
       this.status.textContent = this.muted ? 'Muted' : 'Restarting…';
     } else if (message.type === 'gap') {
       if (message.epoch !== this.epoch) return;

@@ -398,13 +398,21 @@ class WebUI:
             self._queue_client(client, [("json", {"type": "monitor", "active": False})])
 
     def _reset_monitor_clients(self, epoch: int, reason: str) -> None:
+        assert self.monitor is not None
+        epoch = self.monitor.epoch
         for client in self.clients.values():
             if not client.monitoring:
                 continue
+            reset_reason = reason
             while not client.queue.empty():
-                client.queue.get_nowait()
+                _, bundle = client.queue.get_nowait()
+                # A newer tuning reset must not discard a pending privacy or model clear.
+                for kind, payload in bundle:
+                    if kind == "json" and isinstance(payload, dict) and payload.get("type") == "reset" and payload.get("reason") in ("mute", "model"):
+                        reset_reason = payload["reason"]
+            self._queue_client(client, [("json", {"type": "reset", "epoch": epoch, "reason": reset_reason})])
             self._start_monitor(client)
-            self._queue_client(client, [("json", {"type": "reset", "epoch": epoch, "reason": reason}), ("json", self._snapshot())])
+            self._queue_client(client, [("json", self._snapshot())])
 
     def _deliver_monitor(self, events: list[MonitorEvent], dropped: Optional[tuple[int, int, int]]) -> None:
         if self.monitor is None:

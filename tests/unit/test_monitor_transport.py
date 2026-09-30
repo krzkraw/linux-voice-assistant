@@ -56,9 +56,10 @@ async def test_monitor_binary_scores_reset_and_stop(tmp_path):
 
             state.muted = True
             state.notify_settings_changed()
+            reset = await ws.receive_json()
+            assert reset["type"] == "reset" and reset["epoch"] > epoch and reset["reason"] == "mute"
             reset_start = await ws.receive_json()
-            assert reset_start["type"] == "monitor" and reset_start["epoch"] > epoch
-            assert (await ws.receive_json()) == {"type": "reset", "epoch": reset_start["epoch"], "reason": "mute"}
+            assert reset_start["type"] == "monitor" and reset_start["epoch"] == reset["epoch"]
             assert (await ws.receive_json())["muted"] is True
             await ws.send_json({"command": "monitor_stop"})
             while (message := await ws.receive_json()).get("type") != "monitor":
@@ -188,3 +189,62 @@ async def test_slow_client_queue_keeps_control_and_closes_after_repeated_overflo
         server._queue_client(client, [("bytes", b"audio")], 1)
     await asyncio.sleep(0)
     socket_mock.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,value", [("mic_volume", 80), ("mic_auto_gain", 5), ("mic_noise_suppression", 1), ("wake_word_1_threshold", 0.8)])
+async def test_tuning_reset_precedes_acknowledgement_and_keeps_sample_clock(tmp_path, name, value):
+    state = make_state(tmp_path)
+    server = WebUI(state, "127.0.0.1", free_port(), None, "127.0.0.1/32")
+    await server.start()
+    origin = f"http://127.0.0.1:{server.port}"
+    try:
+        async with ClientSession() as client:
+            ws = await client.ws_connect(f"{origin}/api/ws", headers={"Origin": origin})
+            await ws.receive_json()
+            await ws.send_json({"command": "monitor_start"})
+            initial = await ws.receive_json()
+            assert server.monitor is not None
+            server.monitor.observe(1024)
+            state.update_setting(name, value)
+            if name == "wake_word_1_threshold":
+                assert (await ws.receive_json())["primary_threshold"] == value
+                assert server.monitor.epoch == initial["epoch"]
+            else:
+                reset = await ws.receive_json()
+                assert reset == {"type": "reset", "epoch": initial["epoch"] + 1, "reason": "processor"}
+                acknowledgement = await ws.receive_json()
+                assert acknowledgement["type"] == "monitor" and acknowledgement["epoch"] == reset["epoch"]
+                assert acknowledgement["start_sample"] == 1024
+                assert (await ws.receive_json())[name] == value
+            epoch = server.monitor.epoch
+            stale_epoch = initial["epoch"] if name != "wake_word_1_threshold" else epoch - 1
+            assert not server.monitor.offer(MonitorEvent(stale_epoch, 0, 1024, 0, b"\0" * 4096, [], [], False))
+            assert server.monitor.offer(MonitorEvent(epoch, 1024, 2048, 1, b"\0" * 4096, [(1024, b"\0" * 2048, False)], [{"at_sample": 2048}], False))
+            while (message := await ws.receive(timeout=1)).type != WSMsgType.BINARY:
+                assert message.type == WSMsgType.TEXT
+            assert struct.unpack("!4sBBIQII", message.data[:26]) == (b"LVA1", 1, 0, epoch, 1024, 1024, 1)
+            await ws.close()
+    finally:
+        await server.stop()
+
+
+def test_rapid_resets_use_current_epoch_and_preserve_pending_privacy_clear(tmp_path):
+    server = WebUI(make_state(tmp_path), "127.0.0.1", free_port(), None, "127.0.0.1/32")
+    server.monitor = MonitorBus(MagicMock(), server._deliver_monitor)
+    socket_mock = MagicMock(closed=False)
+    client = _Client(socket_mock)
+    server.clients = {socket_mock: client}
+    server._start_monitor(client)
+    server.monitor.observe(1024)
+    old_epoch = server.monitor.reset()
+    epoch = server.monitor.reset()
+    for reason in ("processor", "mute", "model"):
+        server._reset_monitor_clients(old_epoch, reason)
+        server._reset_monitor_clients(epoch, "processor")
+        messages = [payload for _, bundle in list(client.queue._queue) for kind, payload in bundle if kind == "json"]
+        assert [message.get("type") for message in messages] == ["reset", "monitor", None]
+        assert messages[0] == {"type": "reset", "epoch": epoch, "reason": reason}
+        assert messages[1]["epoch"] == epoch and messages[1]["start_sample"] == 1024
+        while not client.queue.empty():
+            client.queue.get_nowait()

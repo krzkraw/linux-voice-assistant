@@ -153,7 +153,9 @@ Larger differences show solid Input and Processed traces with an opaque tonal ba
 Processed uses the contrasting accent color.
 The display merge preserves the actual measurements and never fills across missing intervals or different segments.
 Each peak covers its source sample interval; unequal block sizes retain their original alignment.
-Gaps break both series; mute, Stop, disconnect, model changes, and epoch resets clear their history.
+Gaps break both series; mute, Stop, disconnect, model changes, and unrelated epoch changes clear their history.
+Microphone volume, auto gain, and noise suppression changes preserve both graphs and break the level traces at the processing boundary.
+Threshold changes preserve both graphs and update the current threshold line.
 Raw samples with absolute value at least 1 and processed samples at either PCM rail count as clipped.
 These counts do not identify distortion already introduced upstream.
 The browser retains up to 300 seconds of scores and scalar block peaks in RAM, regardless of the selected graph window.
@@ -204,7 +206,10 @@ After an observation loss, processed diagnostics can remain absent until a clean
 This avoids assigning old buffered PCM to new samples.
 
 `gap` messages report thread loss or a slow client; source intervals appear when known.
-`reset` messages invalidate playback and history.
+`reset` messages invalidate playback; `reason: "processor"` preserves graph history with a new level segment.
+Mute, model, and other reset reasons clear graph history.
+The reset reason precedes the new-epoch monitor acknowledgement, followed by the settings snapshot.
+Processor resets retain absolute sample positions and reject old queued PCM and scores.
 `detector` messages report whether an HA detector path is present.
 Settings snapshots have no `type` field.
 
