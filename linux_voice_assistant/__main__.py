@@ -19,6 +19,7 @@ from pymicro_wakeword import MicroWakeWord, MicroWakeWordFeatures
 from pyopen_wakeword import OpenWakeWord, OpenWakeWordFeatures
 
 from .models import Preferences, ServerState, WakeWordType, initial_stop_word_threshold
+from .monitor import MonitorEvent, ProcessedTimeline
 from .mpv_player import MpvMediaPlayer
 from .peripheral_api import LVAEvent, PeripheralAPIServer
 from .satellite import VoiceSatelliteProtocol
@@ -674,6 +675,20 @@ def process_audio(state: ServerState, mic, block_size: int):
 
     last_active: Optional[float] = None
     webrtc: Optional[WebRTCProcessor] = None
+    sample_position = 0
+    monitor = state.monitor_bus
+    timeline = ProcessedTimeline() if monitor is not None else None
+
+    def publish_monitor(event: Optional[MonitorEvent]) -> None:
+        if event is None or monitor is None:
+            return
+        try:
+            if not monitor.offer(event) and timeline is not None:
+                timeline.invalidate()
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Diagnostic publication failed")
+            if timeline is not None:
+                timeline.invalidate()
 
     try:
         _LOGGER.debug("Opening audio input device: %s", mic.name)
@@ -681,6 +696,15 @@ def process_audio(state: ServerState, mic, block_size: int):
             while True:
                 # Shape: (block_size, n_channels) for stereo, (block_size, 1) for mono.
                 raw = mic_in.record(block_size)  # float32, range [-1, 1]
+                input_start = sample_position
+                input_samples = raw.shape[0]
+                sample_position += input_samples
+                if monitor is not None:
+                    monitor.observe(sample_position)
+                monitoring = monitor is not None and monitor.active and not state.muted
+                context = monitor.capture(input_start, sample_position) if monitoring and monitor is not None else None
+                if monitoring and context is None and timeline is not None:
+                    timeline.invalidate()
                 mic_vol_scalar = max(0.1, min(1.0, state.mic_volume / 100.0))
 
                 # Build per-channel byte arrays.  Channel 0 is the primary
@@ -696,17 +720,34 @@ def process_audio(state: ServerState, mic, block_size: int):
                 audio_chunk = channel_chunks[0]
                 agc = state.preferences.mic_auto_gain or 0
                 ns = state.preferences.mic_noise_suppression or 0
+                use_webrtc = agc > 0 or ns > 0
+                buffered_before = 0
 
-                if agc > 0 or ns > 0:
+                if use_webrtc:
                     if webrtc is None:
                         webrtc = WebRTCProcessor(agc_level=agc, ns_level=ns)
                     else:
                         webrtc.update_settings(agc, ns)
+                    buffered_before = webrtc.buffered_samples if context is not None else 0
                     audio_chunk = webrtc.process(audio_chunk)
-                    if not audio_chunk:
-                        continue
+
+                monitor_event: Optional[MonitorEvent] = None
+                if context is not None and timeline is not None:
+                    try:
+                        epoch, floor = context
+                        input_bytes = np.ascontiguousarray(raw[:, 0] if n_channels > 1 else raw.reshape(-1), dtype="<f4").tobytes()
+                        processed = timeline.segments(epoch, floor, input_start, input_samples, audio_chunk, use_webrtc, buffered_before)
+                        monitor_event = MonitorEvent(epoch, input_start, sample_position, state.settings_revision, input_bytes, processed, [], state.satellite is not None)
+                    except Exception:  # pylint: disable=broad-except
+                        _LOGGER.exception("Diagnostic capture failed")
+                        timeline.invalidate()
+
+                if not audio_chunk:
+                    publish_monitor(monitor_event)
+                    continue
 
                 if state.satellite is None or not hasattr(state.satellite, "_is_streaming_audio"):
+                    publish_monitor(monitor_event)
                     continue
 
                 # WAKE WORD
@@ -831,12 +872,54 @@ def process_audio(state: ServerState, mic, block_size: int):
                             wake_word.probability_cutoff = threshold
 
                             for micro_input in micro_inputs:
-                                if wake_word.process_streaming(micro_input):
+                                if monitoring and wake_word_index == 0:
+                                    probability = wake_word.process_streaming_prob(micro_input)
+                                    crossing = probability is not None and probability > threshold
+                                    if (
+                                        probability is not None
+                                        and monitor_event is not None
+                                        and timeline is not None
+                                        and context is not None
+                                        and timeline.last_consumed_end is not None
+                                        and timeline.last_consumed_end >= context[1]
+                                    ):
+                                        monitor_event.scores.append(
+                                            {
+                                                "model": wake_word.id,
+                                                "at_sample": timeline.last_consumed_end,
+                                                "probability": float(probability),
+                                                "threshold": threshold,
+                                                "crossing": crossing,
+                                                "accepted": False,
+                                            }
+                                        )
+                                else:
+                                    crossing = bool(wake_word.process_streaming(micro_input))
+                                if crossing:
                                     wake_word.debug_probabilities = True
                                     activated = True
                         elif isinstance(wake_word, OpenWakeWord):
                             for oww_input in oww_inputs:
                                 for prob in wake_word.process_streaming(oww_input):
+                                    if (
+                                        monitoring
+                                        and wake_word_index == 0
+                                        and monitor_event is not None
+                                        and timeline is not None
+                                        and context is not None
+                                        and timeline.last_consumed_end is not None
+                                        and timeline.last_consumed_end >= context[1]
+                                    ):
+                                        monitor_event.scores.append(
+                                            {
+                                                "model": wake_word.id,
+                                                "at_sample": timeline.last_consumed_end,
+                                                "probability": float(prob),
+                                                "threshold": threshold,
+                                                "crossing": prob > threshold,
+                                                "accepted": False,
+                                            }
+                                        )
                                     if prob > threshold:
                                         _LOGGER.debug("Wake word '%s' activated (probability %.3f exceeded threshold %.3f)", wake_word.wake_word, prob, threshold)  # type: ignore[attr-defined]
                                         activated = True
@@ -845,8 +928,14 @@ def process_audio(state: ServerState, mic, block_size: int):
                             # Check refractory
                             now = time.monotonic()
                             if (last_active is None) or ((now - last_active) > state.refractory_seconds):
+                                pipeline_was_active = bool(getattr(state.satellite, "_pipeline_active", False))
                                 state.satellite.wakeup(wake_word)
                                 last_active = now
+                                if not pipeline_was_active and bool(getattr(state.satellite, "_pipeline_active", False)) and monitor_event is not None:
+                                    for score in monitor_event.scores:
+                                        if score["model"] == wake_word.id and score["crossing"]:
+                                            score["accepted"] = True
+                                            break
 
                     # Always process to keep state correct
                     stopped = False
@@ -867,6 +956,7 @@ def process_audio(state: ServerState, mic, block_size: int):
                         state.satellite.stop()
                 except Exception:  # pylint: disable=broad-except
                     _LOGGER.exception("Unexpected error handling audio")
+                publish_monitor(monitor_event)
     except Exception:  # pylint: disable=broad-except
         _LOGGER.exception("Unexpected error processing audio")
         sys.exit(1)

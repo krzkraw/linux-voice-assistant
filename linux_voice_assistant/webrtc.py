@@ -39,3 +39,8 @@ class WebRTCProcessor:
             processed_chunks.append(result.audio)
 
         return b"".join(processed_chunks)
+
+    @property
+    def buffered_samples(self) -> int:
+        """Return unprocessed input samples retained for the next frame."""
+        return len(self._buffer) // 2

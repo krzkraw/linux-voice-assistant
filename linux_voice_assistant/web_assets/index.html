@@ -33,6 +33,15 @@
           <div class="control mute-row"><div><label for="muted">Mute assistant</label><small>Suppresses wake activation and voice input to Home Assistant.</small></div><input id="muted" type="checkbox"></div>
         </section>
       </div>
+      <section class="card monitor-card" aria-labelledby="monitor-title">
+        <div class="monitor-heading"><div><span class="eyebrow">LIVE DIAGNOSTICS</span><h2 id="monitor-title">Listen and inspect</h2><p>Audio stays in this browser tab. Start monitoring to hear the current microphone stream.</p></div><div class="monitor-actions"><button id="monitor-start" type="button">Start monitoring</button><button id="monitor-stop" class="quiet" type="button" disabled>Stop</button></div></div>
+        <div class="monitor-toolbar"><div><label for="listen-feed">Listen to</label><select id="listen-feed"><option value="input">Input capture</option><option value="processed">Processed detector audio</option></select></div><div><label for="listen-volume">Listening volume <output id="listen-volume-value">50</output></label><input id="listen-volume" type="range" min="0" max="100" value="50"></div></div>
+        <div class="monitor-stats"><div><span>Monitor</span><strong id="monitor-status">Stopped</strong></div><div><span>Detector</span><strong id="detector-status">Waiting for audio</strong></div><div><span>Gaps</span><strong id="gap-count">0</strong></div><div><span>Source / playback</span><strong><span id="source-rate">16000</span> / <span id="output-rate">—</span> Hz</strong></div></div>
+        <div class="levels"><div><span>Input</span><strong id="input-level">—</strong><small id="input-clips">—</small></div><div><span>Processed</span><strong id="processed-level">—</strong><small id="processed-clips">—</small></div></div>
+        <div class="graph-heading"><div><h3>Primary wake score</h3><p>Points appear when the detector returns them. The cursor follows playback.</p></div><div class="graph-legend"><span>● score</span><span>━ accepted</span><span>┄ threshold</span></div></div>
+        <canvas id="score-graph" role="img" aria-label="Primary wake-word scores, threshold, accepted activations, and audio gaps"></canvas>
+        <div class="monitor-meta"><span>Model: <strong id="monitor-model">—</strong></span><span>Threshold: <strong id="monitor-threshold">—</strong></span><span>Settings revision: <strong id="monitor-revision">—</strong></span></div>
+      </section>
       <p id="message" role="status"></p>
     </div>
   </main>

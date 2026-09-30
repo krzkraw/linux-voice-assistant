@@ -30,4 +30,25 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 #login { max-width: 430px; margin: 48px auto; }
 #login button { margin-top: 20px; }
 #message { min-height: 24px; }
+.monitor-card { margin-top: 18px; }
+.monitor-heading, .monitor-toolbar, .graph-heading { display: flex; justify-content: space-between; align-items: end; gap: 24px; }
+.monitor-heading h2 { margin-bottom: 8px; }
+.monitor-heading p, .graph-heading p { margin: 0; }
+.monitor-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.monitor-toolbar { justify-content: flex-start; align-items: stretch; margin: 30px 0; }
+.monitor-toolbar > div { flex: 1; max-width: 300px; }
+.monitor-toolbar label { margin-bottom: 10px; }
+.monitor-stats, .levels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0; }
+.monitor-stats > div, .levels > div { padding: 14px; border: 1px solid #304451; border-radius: 9px; background: #101b25; }
+.monitor-stats > div > span, .levels > div > span { display: block; color: #8da5b4; font-size: .78rem; margin-bottom: 7px; }
+.monitor-stats strong, .levels strong { font-size: .94rem; font-variant-numeric: tabular-nums; }
+.levels { grid-template-columns: repeat(2, 1fr); }
+.levels small { margin-top: 5px; }
+.graph-heading { margin-top: 38px; }
+.graph-heading h3 { margin: 0 0 6px; }
+.graph-legend { display: flex; gap: 16px; color: #a6bac8; font-size: .8rem; white-space: nowrap; }
+#score-graph { display: block; width: 100%; height: 240px; border-radius: 9px; margin-top: 18px; }
+.monitor-meta { display: flex; gap: 24px; flex-wrap: wrap; color: #8da5b4; font-size: .82rem; margin-top: 16px; }
+.monitor-meta strong { color: #dce8ee; }
 @media (max-width: 690px) { main { padding: 25px 16px 60px; } header { align-items: flex-start; flex-direction: column; } .grid { grid-template-columns: 1fr; } .intro { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 690px) { .monitor-heading, .monitor-toolbar, .graph-heading { align-items: flex-start; flex-direction: column; } .monitor-toolbar > div { width: 100%; max-width: none; } .monitor-stats { grid-template-columns: repeat(2, 1fr); } .graph-legend { white-space: normal; } }

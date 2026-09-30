@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         WakeWord1SensitivityNumberEntity,
         WakeWord2SensitivityNumberEntity,
     )
+    from .monitor import MonitorBus
     from .mpv_player import MpvMediaPlayer
     from .satellite import VoiceSatelliteProtocol
 
@@ -190,6 +191,7 @@ class ServerState:
     listen_during_wake_sound: bool = False
     settings_revision: int = 0
     settings_changed: Optional[Callable[[], None]] = None
+    monitor_bus: "Optional[MonitorBus]" = None
 
     def broadcast(self, msgs: "Iterable[message.Message]") -> None:
         """Send messages to every connected API client.

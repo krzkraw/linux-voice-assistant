@@ -6,21 +6,38 @@ import ipaddress
 import json
 import logging
 import secrets
+import struct
 import time
+from collections import deque
+from contextlib import suppress
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, cast
 from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
 from .models import ServerState
+from .monitor import SAMPLE_RATE, MonitorBus, MonitorEvent
 
 _LOGGER = logging.getLogger(__name__)
 _COOKIE = "lva_session"
 _SESSION_SECONDS = 3600
 _MAX_SESSIONS = 64
 _MAX_LOGIN_PEERS = 1024
+_AUDIO_HEADER = struct.Struct("!4sBBIQII")
+
+
+@dataclass
+class _Client:
+    socket: web.WebSocketResponse
+    queue: "asyncio.Queue[tuple[Optional[int], list[tuple[str, object]]]]" = field(default_factory=lambda: asyncio.Queue(maxsize=8))
+    sender: Optional[asyncio.Task] = None
+    monitoring: bool = False
+    detector_active: Optional[bool] = None
+    start_sample: int = 0
+    overflows: deque[float] = field(default_factory=deque)
 
 
 class WebUI:
@@ -51,17 +68,21 @@ class WebUI:
         self.sessions: dict[str, float] = {}
         self.login_attempts: dict[str, list[float]] = {}
         self.sockets: dict[web.WebSocketResponse, tuple[Optional[str], bool]] = {}
+        self.clients: dict[web.WebSocketResponse, _Client] = {}
         self.socket_reservations = 0
         self.runner: Optional[web.AppRunner] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.broadcast_pending = False
         self.broadcast_dirty = False
+        self.monitor: Optional[MonitorBus] = None
+        self.monitor_settings: Optional[tuple[object, ...]] = None
         self.app = web.Application(client_max_size=4096, middlewares=[self._guard])
         self.app.add_routes(
             [
                 web.get("/", self._asset),
                 web.get("/style.css", self._asset),
                 web.get("/app.js", self._asset),
+                web.get("/monitor.js", self._asset),
                 web.post("/api/login", self._login),
                 web.post("/api/logout", self._logout),
                 web.get("/api/state", self._state),
@@ -81,14 +102,22 @@ class WebUI:
             raise
         self.runner = runner
         self.loop = asyncio.get_running_loop()
+        self.monitor = MonitorBus(self.loop, self._deliver_monitor)
+        self.state.monitor_bus = self.monitor
+        self.monitor_settings = self._monitor_settings()
         self.state.settings_changed = self._changed
         _LOGGER.info("WebUI listening on %s:%d", self.host, self.port)
 
     async def stop(self) -> None:
         """Close sessions and the listener."""
         self.state.settings_changed = None
+        self.state.monitor_bus = None
         for socket in list(self.sockets):
             await socket.close()
+        for client in self.clients.values():
+            if client.sender is not None:
+                client.sender.cancel()
+        self.clients.clear()
         self.sockets.clear()
         self.sessions.clear()
         if self.runner is not None:
@@ -113,7 +142,7 @@ class WebUI:
 
     async def _asset(self, request: web.Request) -> web.Response:
         name = "index.html" if request.path == "/" else request.path.lstrip("/")
-        content_type = {"index.html": "text/html", "style.css": "text/css", "app.js": "text/javascript"}[name]
+        content_type = {"index.html": "text/html", "style.css": "text/css", "app.js": "text/javascript", "monitor.js": "text/javascript"}[name]
         return web.Response(body=files("linux_voice_assistant").joinpath("web_assets", name).read_bytes(), content_type=content_type)
 
     async def _login(self, request: web.Request) -> web.Response:
@@ -202,12 +231,19 @@ class WebUI:
         socket = web.WebSocketResponse(max_msg_size=2048, heartbeat=30)
         try:
             await socket.prepare(request)
+            await asyncio.wait_for(socket.send_json(self._snapshot()), timeout=1)
+            token = request.cookies.get(_COOKIE)
+            self.sockets[socket] = (token, self._bypass(request.remote))
+            client = _Client(socket)
+            self.clients[socket] = client
+            client.sender = asyncio.create_task(self._send_client(client))
+        except Exception:
+            with suppress(Exception):
+                await socket.close()
+            raise
         finally:
             self.socket_reservations -= 1
         try:
-            token = request.cookies.get(_COOKIE)
-            self.sockets[socket] = (token, self._bypass(request.remote))
-            await asyncio.wait_for(socket.send_json(self._snapshot()), timeout=1)
             while not socket.closed:
                 try:
                     message = await socket.receive(timeout=5)
@@ -215,9 +251,28 @@ class WebUI:
                     if not self._authorized(request):
                         break
                     continue
-                if not self._authorized(request) or message.type not in (WSMsgType.PING, WSMsgType.PONG):
+                if not self._authorized(request):
+                    break
+                if message.type in (WSMsgType.PING, WSMsgType.PONG):
+                    continue
+                if message.type != WSMsgType.TEXT:
+                    break
+                try:
+                    command = json.loads(message.data)
+                except (json.JSONDecodeError, ValueError):
+                    break
+                if command == {"command": "monitor_start"}:
+                    self._start_monitor(client)
+                elif command == {"command": "monitor_stop"}:
+                    self._stop_monitor(client)
+                else:
                     break
         finally:
+            if client.monitoring:
+                self._stop_monitor(client, acknowledge=False)
+            if client.sender is not None:
+                client.sender.cancel()
+            self.clients.pop(socket, None)
             self.sockets.pop(socket, None)
             await socket.close()
         return socket
@@ -233,12 +288,19 @@ class WebUI:
             "primary_model": primary,
             "primary_threshold": self.state.wake_word_1_threshold,
             "muted": self.state.muted,
+            "connected": self.state.connected,
             "models": [{"id": word.id, "name": word.wake_word} for word in self.state.available_wake_words.values()],
         }
 
     def _changed(self) -> None:
         if self.loop is not None:
             try:
+                settings = self._monitor_settings()
+                if self.monitor is not None and self.monitor_settings is not None and settings != self.monitor_settings:
+                    reason = "mute" if settings[0] != self.monitor_settings[0] else "model" if settings[1] != self.monitor_settings[1] else "processor"
+                    epoch = self.monitor.reset()
+                    self.loop.call_soon_threadsafe(self._reset_monitor_clients, epoch, reason)
+                self.monitor_settings = settings
                 self.loop.call_soon_threadsafe(self._schedule_broadcast)
             except RuntimeError:
                 pass
@@ -258,14 +320,135 @@ class WebUI:
                 if socket.closed or (not bypassed and (token is None or self.sessions.get(token, 0) <= time.monotonic())):
                     await socket.close(code=1008, message=b"Session expired")
                     continue
-                try:
-                    await asyncio.wait_for(socket.send_json(snapshot), timeout=1)
-                except (ConnectionError, asyncio.TimeoutError):
-                    await socket.close()
+                self._queue_client(self.clients[socket], [("json", snapshot)])
         finally:
             self.broadcast_pending = False
             if self.broadcast_dirty:
                 self._schedule_broadcast()
+
+    async def _send_client(self, client: _Client) -> None:
+        try:
+            while not client.socket.closed:
+                epoch, bundle = await client.queue.get()
+                for kind, payload in bundle:
+                    if epoch is not None and (not client.monitoring or self.monitor is None or epoch != self.monitor.epoch):
+                        break
+                    if kind == "bytes":
+                        await asyncio.wait_for(client.socket.send_bytes(cast(bytes, payload)), timeout=1)
+                    else:
+                        await asyncio.wait_for(client.socket.send_json(payload), timeout=1)
+        except (ConnectionError, asyncio.TimeoutError, RuntimeError):
+            await client.socket.close()
+
+    def _queue_client(self, client: _Client, bundle: list[tuple[str, object]], epoch: Optional[int] = None) -> None:
+        if client.socket.closed:
+            return
+        if client.queue.full():
+            while not client.queue.empty():
+                client.queue.get_nowait()
+            now = time.monotonic()
+            client.overflows.append(now)
+            while client.overflows and now - client.overflows[0] > 10:
+                client.overflows.popleft()
+            if len(client.overflows) >= 3:
+                asyncio.create_task(client.socket.close(code=1013, message=b"Slow monitor client"))
+                return
+            gap = {"type": "gap", "epoch": self.monitor.epoch if self.monitor is not None else 0, "reason": "slow_client"}
+            mandatory = bundle if epoch is None else []
+            client.queue.put_nowait((None, [("json", gap), ("json", self._snapshot()), *mandatory]))
+            return
+        client.queue.put_nowait((epoch, bundle))
+
+    def _start_monitor(self, client: _Client) -> None:
+        assert self.monitor is not None
+        if not client.monitoring:
+            epoch, start = self.monitor.start()
+            client.monitoring = True
+            client.detector_active = None
+        else:
+            epoch, start = self.monitor.epoch, self.monitor.last_sample_end
+        client.start_sample = start
+        self._queue_client(
+            client,
+            [
+                (
+                    "json",
+                    {
+                        "type": "monitor",
+                        "active": True,
+                        "stream_id": self.monitor.stream_id,
+                        "epoch": epoch,
+                        "start_sample": start,
+                        "sample_rate": SAMPLE_RATE,
+                        "input_format": "float32le",
+                        "processed_format": "s16le",
+                        "score_position": "available_after_processed_block",
+                    },
+                )
+            ],
+        )
+
+    def _stop_monitor(self, client: _Client, acknowledge: bool = True) -> None:
+        if client.monitoring and self.monitor is not None:
+            self.monitor.stop()
+            client.monitoring = False
+        while not client.queue.empty():
+            client.queue.get_nowait()
+        if acknowledge:
+            self._queue_client(client, [("json", {"type": "monitor", "active": False})])
+
+    def _reset_monitor_clients(self, epoch: int, reason: str) -> None:
+        for client in self.clients.values():
+            if not client.monitoring:
+                continue
+            while not client.queue.empty():
+                client.queue.get_nowait()
+            self._start_monitor(client)
+            self._queue_client(client, [("json", {"type": "reset", "epoch": epoch, "reason": reason}), ("json", self._snapshot())])
+
+    def _deliver_monitor(self, events: list[MonitorEvent], dropped: Optional[tuple[int, int, int]]) -> None:
+        if self.monitor is None:
+            return
+        ordered: list[tuple[int, int, object]] = [(event.start, 1, event) for event in events]
+        if dropped is not None and dropped[0] == self.monitor.epoch:
+            ordered.append((dropped[1], 0, dropped))
+        for _, kind, item in sorted(ordered, key=lambda entry: (entry[0], entry[1])):
+            if kind == 0:
+                gap = cast(tuple[int, int, int], item)
+                for client in self.clients.values():
+                    if client.monitoring and gap[2] > client.start_sample:
+                        self._queue_client(client, [("json", {"type": "gap", "epoch": gap[0], "from_sample": max(gap[1], client.start_sample), "to_sample": gap[2], "reason": "thread_queue"})])
+                continue
+            event = cast(MonitorEvent, item)
+            if event.epoch != self.monitor.epoch:
+                continue
+            for client in self.clients.values():
+                if client.monitoring and event.end > client.start_sample:
+                    if client.detector_active != event.detector_active:
+                        self._queue_client(client, [("json", {"type": "detector", "active": event.detector_active})])
+                        client.detector_active = event.detector_active
+                    floor = client.start_sample
+                    bundle: list[tuple[str, object]] = []
+                    input_start = max(event.start, floor)
+                    input_data = event.input_bytes[(input_start - event.start) * 4 :]
+                    if input_data:
+                        input_header = _AUDIO_HEADER.pack(b"LVA1", 1, int(input_start > event.start), event.epoch, input_start, len(input_data) // 4, event.revision)
+                        bundle.append(("bytes", input_header + input_data))
+                    for start, data, discontinuity in event.processed:
+                        visible_start = max(start, floor)
+                        visible = data[(visible_start - start) * 2 :]
+                        if visible:
+                            header = _AUDIO_HEADER.pack(b"LVA1", 2, int(discontinuity or visible_start > start), event.epoch, visible_start, len(visible) // 2, event.revision)
+                            bundle.append(("bytes", header + visible))
+                    scores = [score for score in event.scores if score["at_sample"] > floor]
+                    if scores:
+                        bundle.append(("json", {"type": "scores", "epoch": event.epoch, "revision": event.revision, "position_kind": "available_after_processed_block", "items": scores}))
+                    if bundle:
+                        self._queue_client(client, bundle, event.epoch)
+
+    def _monitor_settings(self) -> tuple[object, ...]:
+        slots = self.state.preferences.active_wake_words
+        return (self.state.muted, slots[0] if slots else None, self.state.mic_auto_gain, self.state.mic_noise_suppression, self.state.mic_volume)
 
     def _authorized(self, request: web.Request) -> bool:
         self._expire_sessions()
