@@ -1,5 +1,27 @@
 import { AudioMonitor } from './monitor.js';
 
+const themeMode = document.getElementById('theme-mode');
+const themeColor = document.getElementById('theme-color');
+const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+let appearance;
+try { appearance = JSON.parse(localStorage.getItem('lva-appearance') ?? '{}'); } catch { /* Browser storage is optional. */ }
+themeMode.value = ['system', 'light', 'dark'].includes(appearance?.mode) ? appearance.mode : 'system';
+themeColor.value = ['violet', 'sage', 'amber'].includes(appearance?.color) ? appearance.color : 'violet';
+
+function applyAppearance(save = false) {
+  document.documentElement.dataset.theme = themeMode.value === 'system' ? systemTheme.matches ? 'dark' : 'light' : themeMode.value;
+  document.documentElement.dataset.color = themeColor.value;
+  if (save) {
+    try { localStorage.setItem('lva-appearance', JSON.stringify({ mode: themeMode.value, color: themeColor.value })); } catch { /* Keep the selection for this page. */ }
+  }
+  document.dispatchEvent(new Event('appearancechange'));
+}
+
+themeMode.addEventListener('change', () => applyAppearance(true));
+themeColor.addEventListener('change', () => applyAppearance(true));
+systemTheme.addEventListener('change', () => { if (themeMode.value === 'system') applyAppearance(); });
+applyAppearance();
+
 const names = ['mic_volume', 'mic_auto_gain', 'mic_noise_suppression', 'primary_model', 'primary_threshold', 'muted'];
 const controls = Object.fromEntries(names.map(name => [name, document.getElementById(name)]));
 const login = document.getElementById('login');

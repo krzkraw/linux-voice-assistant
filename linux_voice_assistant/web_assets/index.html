@@ -11,7 +11,7 @@
   <main>
     <header>
       <div class="title"><h1>Audio tuning</h1><span>Linux Voice Assistant</span></div>
-      <div class="status"><span id="connection" class="dot"></span><span id="connection-text">Connecting</span></div>
+      <div class="header-tools"><div class="appearance"><select id="theme-mode" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><select id="theme-color" aria-label="Color"><option value="violet">Violet</option><option value="sage">Sage</option><option value="amber">Amber</option></select></div><div class="status"><span id="connection" class="dot"></span><span id="connection-text">Connecting</span></div></div>
     </header>
     <section id="login" hidden>
       <h2>Sign in</h2>
@@ -25,8 +25,8 @@
         <div class="monitor-meta"><span id="monitor-model">—</span><span>Threshold <strong id="monitor-threshold">—</strong></span><span>Revision <strong id="monitor-revision">—</strong></span></div>
       </section>
       <section class="audio-section" aria-labelledby="audio-title">
-        <div class="section-heading"><h2 id="audio-title">Audio level <small>dBFS</small></h2><div class="graph-legend"><span class="input-series">┄ Input</span><span class="processed-series">━ Processed</span></div></div>
-        <canvas id="level-graph" role="img" aria-label="Input (dotted) and processed (solid) block peaks in dBFS over 30 seconds, aligned with wake scores"></canvas>
+        <div class="section-heading"><h2 id="audio-title">Audio level <small>dBFS</small></h2><div class="graph-legend"><span class="input-series">━ Input / merged</span><span class="processed-series">━ Processed</span></div></div>
+        <canvas id="level-graph" role="img" aria-label="Audio block peaks in dBFS over 30 seconds. Differences up to 2 dB show Input only; larger differences show both feeds with a filled band. Gaps remain empty."></canvas>
       </section>
       <section class="microphone-section" aria-labelledby="microphone-title">
         <h2 id="microphone-title">Microphone</h2>

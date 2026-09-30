@@ -139,13 +139,23 @@ Without an HA connection, audio remains available while detector inference waits
 
 Levels and clipping counts describe the latest received frame.
 The microphone volume, auto gain, and noise suppression controls are vertical native sliders; higher values appear upward.
-The audio level chart shows block peaks on a −90..0 dBFS scale, with dotted Input and solid Processed lines.
+Both charts use the same responsive height.
+The audio level chart shows block peaks on a −90..0 dBFS scale.
+When overlapping levels differ by at most 2 dB, the chart shows only Input in the primary color.
+Larger differences show solid Input and Processed traces with an opaque tonal band between them.
+Processed uses the contrasting accent color.
+The display merge preserves the actual measurements and never fills across missing intervals or different segments.
 Each peak covers its source sample interval; unequal block sizes retain their original alignment.
 Gaps break both series; mute, Stop, disconnect, model changes, and epoch resets clear their history.
 Raw samples with absolute value at least 1 and processed samples at either PCM rail count as clipped.
 These counts do not identify distortion already introduced upstream.
 The browser retains a rolling feed buffer, 30 seconds of scores, and 30 seconds of block peaks in RAM.
 LVA does not save recordings or diagnostic sessions.
+
+Appearance offers System, Light, and Dark modes with Violet, Sage, and Amber tonal presets.
+System follows the browser's preferred appearance and reacts to changes.
+Appearance selections persist only in this browser's local storage; unavailable storage limits persistence to the current page.
+Appearance changes do not change LVA settings or send requests to HA.
 
 Mute cancels scheduled playback and clears server queues and browser history.
 Unmute, model changes, microphone volume changes, and WebRTC setting changes reset the diagnostic epoch.

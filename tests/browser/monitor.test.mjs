@@ -1,25 +1,29 @@
 import assert from 'node:assert/strict';
-import { AudioMonitor, decodeFrame } from '../../linux_voice_assistant/web_assets/monitor.js';
+import { AudioMonitor, decodeFrame, levelIntervals } from '../../linux_voice_assistant/web_assets/monitor.js';
 
 const elements = new Map();
 function element(id) {
   if (!elements.has(id)) elements.set(id, { value: id === 'listen-feed' ? 'input' : '0', textContent: '', disabled: false, addEventListener() {}, clientWidth: 600, clientHeight: 220, getContext: () => id === 'level-graph' ? levelCanvas : canvas });
   return elements.get(id);
 }
-const canvas = { setTransform() {}, clearRect() {}, fillRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {}, arc() {}, fill() {}, fillText() {} };
+const canvas = { setTransform() {}, clearRect() {}, fillRect() {}, rect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, setLineDash() {}, arc() {}, fill() {}, fillText() {} };
 let recordLevels = false;
 const levelPaths = [];
+const levelFills = [];
+const colors = { primary: '#6750a4', accent: '#7d5260', band: '#ffd8e4', background: '#fffbfe', muted: '#49454f', grid: '#cac4d0', error: '#b3261e', 'on-surface': '#1d1b20' };
 const levelCanvas = {
   ...canvas,
   setLineDash(dash) { this.dash = [...dash]; },
   beginPath() { this.points = []; },
   moveTo(x, y) { this.points.push({ move: true, x, y }); },
   lineTo(x, y) { this.points.push({ move: false, x, y }); },
+  rect(x, y, width, height) { if (recordLevels && this.fillStyle === colors.band) levelFills.push({ x, y, width, height }); },
   stroke() {
-    if (recordLevels && ['#75cbb5', '#d7a259'].includes(this.strokeStyle)) levelPaths.push({ color: this.strokeStyle, dash: this.dash, points: this.points });
+    if (recordLevels && [colors.primary, colors.accent].includes(this.strokeStyle)) levelPaths.push({ color: this.strokeStyle, dash: this.dash ?? [], points: this.points });
   },
 };
-globalThis.document = { getElementById: element, hidden: false };
+globalThis.document = { getElementById: element, hidden: false, documentElement: {}, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } };
+globalThis.getComputedStyle = () => ({ getPropertyValue: role => colors[role.slice(2)] });
 globalThis.devicePixelRatio = 1;
 globalThis.requestAnimationFrame = () => 1;
 globalThis.cancelAnimationFrame = () => {};
@@ -38,7 +42,7 @@ globalThis.AudioContext = class {
   }
 };
 
-function frame(feed, start, count = 1024, flags = 0) {
+function frame(feed, start, count = 1024, flags = 0, sample = .25) {
   const size = feed === 1 ? 4 : 2;
   const bytes = new ArrayBuffer(26 + count * size);
   const view = new DataView(bytes);
@@ -50,8 +54,8 @@ function frame(feed, start, count = 1024, flags = 0) {
   view.setUint32(18, count);
   view.setUint32(22, 3);
   for (let i = 0; i < count; i++) {
-    if (feed === 1) view.setFloat32(26 + i * 4, 0.25, true);
-    else view.setInt16(26 + i * 2, 8192, true);
+    if (feed === 1) view.setFloat32(26 + i * 4, sample, true);
+    else view.setInt16(26 + i * 2, Math.round(sample * 32768), true);
   }
   return bytes;
 }
@@ -149,7 +153,7 @@ const historyMonitor = new AudioMonitor(() => true);
 historyMonitor.message({ type: 'monitor', active: true, epoch: 1, sample_rate: 16000 });
 historyMonitor.binary(frame(1, 0));
 historyMonitor.binary(frame(1, 1024));
-for (const start of [0, 480, 960]) historyMonitor.binary(frame(2, start, 480));
+for (const start of [0, 480, 960]) historyMonitor.binary(frame(2, start, 480, 0, .5));
 assert.deepEqual(historyMonitor.levelHistory.input.map(point => [point.start, point.end]), [[0, 1024], [1024, 2048]]);
 assert.deepEqual(historyMonitor.levelHistory.processed.map(point => [point.start, point.end]), [[0, 480], [480, 960], [960, 1440]]);
 assert.ok(Math.abs(historyMonitor.levelHistory.input[0].level - 20 * Math.log10(.25)) < .001);
@@ -161,17 +165,18 @@ assert.equal(historyMonitor.levelHistory.input.length, 2);
 recordLevels = true;
 historyMonitor.drawLevels(2048);
 let [processedPath, inputPath] = levelPaths.splice(0);
-assert.equal(processedPath.color, '#d7a259');
-assert.equal(inputPath.color, '#75cbb5');
-assert.deepEqual(inputPath.dash, [2, 4]);
+assert.equal(processedPath.color, colors.accent);
+assert.equal(inputPath.color, colors.primary);
+assert.deepEqual(inputPath.dash, []);
 assert.deepEqual(processedPath.dash, []);
 assert.equal(inputPath.points[0].x, processedPath.points[0].x);
 assert.ok(Math.abs(processedPath.points[1].x - processedPath.points[0].x - 480 / (30 * 16000) * 564) < 1e-9);
 assert.equal(inputPath.points.at(-1).x, 600);
 assert.equal(inputPath.points.filter(point => point.move).length, 1);
+assert.ok(levelFills.length > 0 && levelFills.every(fill => fill.width > 0 && fill.height > 0));
 historyMonitor.message({ type: 'gap', epoch: 1, to_sample: 2048 });
 historyMonitor.binary(frame(1, 2048));
-historyMonitor.binary(frame(2, 1440, 480, 1));
+historyMonitor.binary(frame(2, 1440, 480, 1, .5));
 historyMonitor.drawLevels(3072);
 [processedPath, inputPath] = levelPaths.splice(0);
 assert.equal(inputPath.points.filter(point => point.move).length, 2, 'An explicit gap breaks a contiguous input path');
@@ -197,3 +202,40 @@ for (const boundary of ['stop', 'disconnected', 'reset', 'epoch', 'mute', 'model
   assert.deepEqual(historyMonitor.levelHistory, { input: [], processed: [] }, `${boundary} clears both level histories`);
 }
 historyMonitor.stop(false);
+
+const point = (start, end, level, segment = 0) => ({ start, end, level, segment });
+for (const delta of [-2, 0, 2, 2.00001, -2.00001]) {
+  const intervals = levelIntervals([point(0, 100, -40)], [point(0, 100, -40 + delta)]);
+  assert.equal(intervals[0].merged, Math.abs(delta) <= 2);
+  assert.equal(intervals[0].fill, Math.abs(delta) > 2);
+}
+assert.equal(levelIntervals([point(0, 100, -Infinity)], [point(0, 100, -Infinity)])[0].merged, true);
+assert.equal(levelIntervals([point(0, 100, -100)], [point(0, 100, -110)])[0].fill, true, 'Compare real levels below the display floor');
+assert.equal(historyMonitor.meter({ feed: 'input', data: new Float32Array([.000001]) }).toFixed(1), '-120.0');
+assert.equal(element('input-meter').value, -90);
+
+const input = [point(0, 1024, -40), point(1024, 2048, -50)];
+const processed = [point(0, 480, -42), point(480, 960, -44), point(960, 1440, -38), point(1600, 2048, -51)];
+const originalLevels = JSON.stringify({ input, processed });
+assert.deepEqual(levelIntervals(input, processed).map(interval => [interval.start, interval.end, interval.merged, interval.fill]), [
+  [0, 480, true, false], [480, 960, false, true], [960, 1024, true, false],
+  [1024, 1440, false, true], [1440, 1600, false, false], [1600, 2048, true, false],
+]);
+assert.equal(JSON.stringify({ input, processed }), originalLevels, 'Display merging preserves measurements');
+const gaps = levelIntervals([point(0, 100, -40), point(200, 300, -40, 1)], [point(0, 100, -50), point(250, 300, -60, 1)]);
+assert.deepEqual(gaps.filter(interval => interval.fill).map(interval => [interval.start, interval.end]), [[0, 100], [250, 300]]);
+assert.equal(levelIntervals([point(0, 100, -40, 0)], [point(0, 100, -50, 1)])[0].fill, false, 'Different segments cannot form a band');
+assert.deepEqual(levelIntervals([], []), []);
+assert.equal(levelIntervals([], [point(0, 100, -50)])[0].fill, false);
+
+historyMonitor.levelHistory = { input: [point(0, 100, -40)], processed: [point(0, 100, -42)] };
+levelPaths.length = 0; levelFills.length = 0; recordLevels = true;
+historyMonitor.drawLevels(100);
+const [hiddenProcessed, mergedInput] = levelPaths;
+assert.equal(hiddenProcessed.points.length, 0, 'Merged intervals show only Input');
+assert.ok(mergedInput.points.length > 0);
+assert.equal(levelFills.length, 0, 'Merged intervals have no band');
+recordLevels = false;
+colors.primary = '#123456';
+document.listeners.appearancechange();
+assert.equal(historyMonitor.colors.primary, '#123456', 'Canvas colors refresh when appearance changes');

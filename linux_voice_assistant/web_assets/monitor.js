@@ -2,6 +2,27 @@ const RATE = 16000;
 const SECOND = RATE;
 const HISTORY = RATE * 30;
 
+export function levelIntervals(input, processed) {
+  const intervals = [];
+  let i = 0, j = 0;
+  let start = Math.min(input[0]?.start ?? Infinity, processed[0]?.start ?? Infinity);
+  while (i < input.length || j < processed.length) {
+    while (i < input.length && input[i].end <= start) i++;
+    while (j < processed.length && processed[j].end <= start) j++;
+    const a = input[i], b = processed[j];
+    const activeInput = a?.start <= start ? a : undefined;
+    const activeProcessed = b?.start <= start ? b : undefined;
+    const end = Math.min(activeInput ? a.end : a?.start ?? Infinity, activeProcessed ? b.end : b?.start ?? Infinity);
+    if (activeInput || activeProcessed) {
+      const paired = activeInput && activeProcessed && a.segment === b.segment;
+      const merged = Boolean(paired && (a.level === b.level || Math.abs(a.level - b.level) <= 2));
+      intervals.push({ start, end, input: activeInput, processed: activeProcessed, merged, fill: Boolean(paired && !merged) });
+    }
+    start = end;
+  }
+  return intervals;
+}
+
 export function decodeFrame(buffer) {
   const view = new DataView(buffer);
   if (buffer.byteLength < 26 || view.getUint32(0) !== 0x4c564131) throw new Error('Invalid audio frame');
@@ -54,6 +75,8 @@ export class AudioMonitor {
     this.nextTime = 0;
     this.cursor = null;
     this.frame = null;
+    this.updateColors();
+    document.addEventListener('appearancechange', () => { this.updateColors(); this.draw(); });
     this.startButton.addEventListener('click', () => this.start());
     this.stopButton.addEventListener('click', () => this.stop());
     this.feedSelect.addEventListener('change', () => this.switchFeed());
@@ -279,7 +302,7 @@ export class AudioMonitor {
     this.meters[frame.feed].value = Math.max(-90, Math.min(0, db));
     this.levels[frame.feed].textContent = `${peak > 0 ? db.toFixed(1) : '−∞'} dBFS`;
     this.clips[frame.feed].textContent = `${clips} clipped`;
-    return Math.max(-90, Math.min(0, db));
+    return db;
   }
 
   animate() {
@@ -290,23 +313,27 @@ export class AudioMonitor {
 
   draw() {
     const { ctx, width, height } = this.prepareCanvas(this.canvas);
-    ctx.strokeStyle = '#314a59'; ctx.beginPath(); ctx.moveTo(36, height - 22); ctx.lineTo(width, height - 22); ctx.stroke();
     const right = this.playCursor() ?? Math.max(this.scores.at(-1)?.at_sample ?? 0, this.levelNewest);
     const left = right - HISTORY;
     const x = sample => 36 + (sample - left) / HISTORY * (width - 36);
     const y = probability => 16 + (1 - probability) * (height - 38);
-    ctx.strokeStyle = '#d7a259'; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(36, y(this.threshold)); ctx.lineTo(width, y(this.threshold)); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = '#7fdcca';
+    ctx.font = '12px system-ui';
+    for (const probability of [0, .25, .5, .75, 1]) {
+      ctx.strokeStyle = this.colors.grid; ctx.beginPath(); ctx.moveTo(36, y(probability)); ctx.lineTo(width, y(probability)); ctx.stroke();
+      ctx.fillStyle = this.colors.muted; ctx.fillText(probability.toFixed(2), 2, y(probability) + 4);
+    }
+    ctx.strokeStyle = this.colors.accent; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.moveTo(36, y(this.threshold)); ctx.lineTo(width, y(this.threshold)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = this.colors.primary;
     for (const score of this.scores) {
       const pointX = x(score.at_sample);
-      if (pointX < 0 || pointX > width) continue;
+      if (pointX < 36 || pointX > width) continue;
       ctx.beginPath(); ctx.arc(pointX, y(score.probability), score.crossing ? 4 : 2, 0, Math.PI * 2); ctx.fill();
-      if (score.accepted) { ctx.strokeStyle = '#edca71'; ctx.beginPath(); ctx.moveTo(pointX, 8); ctx.lineTo(pointX, height - 22); ctx.stroke(); }
+      if (score.accepted) { ctx.strokeStyle = this.colors.accent; ctx.beginPath(); ctx.moveTo(pointX, 8); ctx.lineTo(pointX, height - 22); ctx.stroke(); }
     }
-    ctx.strokeStyle = '#e17878';
-    for (const sample of this.gapMarks) { const pointX = x(sample); if (pointX >= 0 && pointX <= width) { ctx.beginPath(); ctx.moveTo(pointX, 0); ctx.lineTo(pointX, height); ctx.stroke(); } }
-    ctx.fillStyle = '#a6bac8'; ctx.font = '12px system-ui'; ctx.fillText('30 seconds', 12, height - 6); ctx.fillText('threshold', 12, Math.max(12, y(this.threshold) - 5));
-    if (this.playing) { ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
+    ctx.strokeStyle = this.colors.error;
+    for (const sample of this.gapMarks) { const pointX = x(sample); if (pointX >= 36 && pointX <= width) { ctx.beginPath(); ctx.moveTo(pointX, 0); ctx.lineTo(pointX, height); ctx.stroke(); } }
+    ctx.fillStyle = this.colors.muted; ctx.fillText('30 seconds', 36, height - 6); ctx.fillText('threshold', 44, Math.max(12, y(this.threshold) - 5));
+    if (this.playing) { ctx.strokeStyle = this.colors['on-surface']; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
     this.drawLevels(right);
   }
 
@@ -314,34 +341,45 @@ export class AudioMonitor {
     const { ctx, width, height } = this.prepareCanvas(this.levelCanvas);
     const left = right - HISTORY;
     const x = sample => 36 + (sample - left) / HISTORY * (width - 36);
-    const y = level => 16 - level / 90 * (height - 38);
-    ctx.font = '11px system-ui';
-    for (const level of [0, -30, -60, -90]) {
-      ctx.strokeStyle = '#29343a'; ctx.beginPath(); ctx.moveTo(36, y(level)); ctx.lineTo(width, y(level)); ctx.stroke();
-      ctx.fillStyle = '#8e9da6'; ctx.fillText(String(level), 4, y(level) + 4);
+    const y = level => 16 - Math.max(-90, Math.min(0, level)) / 90 * (height - 38);
+    ctx.font = '12px system-ui';
+    for (const level of [0, -15, -30, -45, -60, -75, -90]) {
+      ctx.strokeStyle = this.colors.grid; ctx.beginPath(); ctx.moveTo(36, y(level)); ctx.lineTo(width, y(level)); ctx.stroke();
+      ctx.fillStyle = this.colors.muted; ctx.fillText(String(level), 4, y(level) + 4);
     }
-    ctx.lineWidth = 1.5;
+    const intervals = levelIntervals(this.levelHistory.input, this.levelHistory.processed);
+    ctx.fillStyle = this.colors.band;
+    ctx.beginPath();
+    for (const interval of intervals) {
+      if (!interval.fill || interval.end <= left || interval.start >= right) continue;
+      const startX = x(Math.max(left, interval.start)), endX = x(Math.min(right, interval.end));
+      const a = y(interval.input.level), b = y(interval.processed.level);
+      ctx.rect(startX, Math.min(a, b), endX - startX, Math.abs(a - b));
+    }
+    ctx.fill();
+    ctx.lineWidth = 2.5;
     for (const feed of ['processed', 'input']) {
-      ctx.strokeStyle = feed === 'input' ? '#75cbb5' : '#d7a259';
-      ctx.setLineDash(feed === 'input' ? [2, 4] : []);
+      ctx.strokeStyle = feed === 'input' ? this.colors.primary : this.colors.accent;
       ctx.beginPath();
       let previous;
-      for (const point of this.levelHistory[feed]) {
-        if (point.end < left || point.start > right) continue;
-        const startX = x(Math.max(left, point.start));
-        const endX = x(Math.min(right, point.end));
-        if (previous && previous.end === point.start && previous.segment === point.segment) ctx.lineTo(startX, y(point.level));
+      for (const interval of intervals) {
+        const point = interval[feed];
+        if (!point || (feed === 'processed' && interval.merged)) { previous = undefined; continue; }
+        if (interval.end <= left || interval.start >= right) continue;
+        const startX = x(Math.max(left, interval.start));
+        const endX = x(Math.min(right, interval.end));
+        if (previous && previous.end === interval.start && previous.segment === point.segment) ctx.lineTo(startX, y(point.level));
         else ctx.moveTo(startX, y(point.level));
         ctx.lineTo(endX, y(point.level));
-        previous = point;
+        previous = { end: interval.end, segment: point.segment };
       }
       ctx.stroke();
     }
     ctx.setLineDash([]); ctx.lineWidth = 1;
-    ctx.strokeStyle = '#e17878';
+    ctx.strokeStyle = this.colors.error;
     for (const sample of this.gapMarks) { const pointX = x(sample); if (pointX >= 36 && pointX <= width) { ctx.beginPath(); ctx.moveTo(pointX, 0); ctx.lineTo(pointX, height); ctx.stroke(); } }
-    ctx.fillStyle = '#8e9da6'; ctx.fillText('30 seconds', 36, height - 6);
-    if (this.playing) { ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
+    ctx.fillStyle = this.colors.muted; ctx.fillText('30 seconds', 36, height - 6);
+    if (this.playing) { ctx.strokeStyle = this.colors['on-surface']; ctx.beginPath(); ctx.moveTo(width - 1, 0); ctx.lineTo(width - 1, height); ctx.stroke(); }
   }
 
   prepareCanvas(canvas) {
@@ -352,12 +390,17 @@ export class AudioMonitor {
     const ctx = canvas.getContext('2d');
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#101418'; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = this.colors.background; ctx.fillRect(0, 0, width, height);
     return { ctx, width, height };
   }
 
   updateButtons() {
     this.startButton.disabled = this.monitoring || this.requested;
     this.stopButton.disabled = !(this.monitoring || this.requested);
+  }
+
+  updateColors() {
+    const style = getComputedStyle(document.documentElement);
+    this.colors = Object.fromEntries(['background', 'on-surface', 'muted', 'grid', 'primary', 'accent', 'band', 'error'].map(role => [role, style.getPropertyValue(`--${role}`).trim()]));
   }
 }
